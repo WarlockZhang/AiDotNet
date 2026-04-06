@@ -237,8 +237,16 @@ namespace AiDotNet.Autodiff
             var current = inputNode;
             foreach (var layer in network.Layers)
             {
-                var inputs = new System.Collections.Generic.List<ComputationNode<T>> { current };
-                current = layer.ExportComputationGraph(inputs);
+                if (layer is NeuralNetworks.Layers.LayerBase<T> layerBase)
+                {
+                    var inputs = new System.Collections.Generic.List<ComputationNode<T>> { current };
+                    current = layerBase.ExportComputationGraph(inputs);
+                }
+                else
+                {
+                    throw new NotSupportedException(
+                        $"Layer {layer.GetType().Name} does not support computation graph export.");
+                }
             }
 
             return current;
