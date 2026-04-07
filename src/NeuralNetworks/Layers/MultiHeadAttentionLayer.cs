@@ -1,4 +1,4 @@
-﻿using AiDotNet.Attributes;
+using AiDotNet.Attributes;
 using AiDotNet.Enums;
 using AiDotNet.Interfaces;
 using AiDotNet.NeuralNetworks.Attention;
@@ -640,6 +640,28 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         }
 
         return diagnostics;
+    }
+
+    /// <summary>
+    /// Declares named input ports for this multi-input layer.
+    /// </summary>
+    public override IReadOnlyList<LayerPort> InputPorts =>
+    [
+        new LayerPort("query", GetInputShape()),
+        new LayerPort("key", GetInputShape(), Required: false),
+        new LayerPort("value", GetInputShape(), Required: false)
+    ];
+
+    /// <summary>
+    /// Named multi-input forward pass.
+    /// </summary>
+    public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
+    {
+        if (!inputs.TryGetValue("query", out var query))
+            throw new ArgumentException("MultiHeadAttentionLayer requires a 'query' input.", nameof(inputs));
+        inputs.TryGetValue("key", out var key);
+        inputs.TryGetValue("value", out var value);
+        return ForwardInternal(query, key ?? query, value ?? key ?? query);
     }
 
     /// <summary>

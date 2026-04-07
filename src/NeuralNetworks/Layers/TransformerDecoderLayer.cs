@@ -1,4 +1,4 @@
-﻿using AiDotNet.Attributes;
+using AiDotNet.Attributes;
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors.Engines;
 using AiDotNet.Tensors.Engines.DirectGpu;
@@ -672,6 +672,27 @@ public class TransformerDecoderLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         RegisterSubLayer(_feedForward);
         RegisterSubLayer(_feedForwardProjection);
         RegisterSubLayer(_norm3);
+    }
+
+    /// <summary>
+    /// Declares named input ports for this multi-input layer.
+    /// </summary>
+    public override IReadOnlyList<LayerPort> InputPorts =>
+    [
+        new LayerPort("decoder_input", GetInputShape()),
+        new LayerPort("encoder_output", GetInputShape())
+    ];
+
+    /// <summary>
+    /// Named multi-input forward pass.
+    /// </summary>
+    public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
+    {
+        if (!inputs.TryGetValue("decoder_input", out var decoderInput))
+            throw new ArgumentException("TransformerDecoderLayer requires 'decoder_input'.", nameof(inputs));
+        if (!inputs.TryGetValue("encoder_output", out var encoderOutput))
+            throw new ArgumentException("TransformerDecoderLayer requires 'encoder_output'.", nameof(inputs));
+        return Forward(decoderInput, encoderOutput);
     }
 
     /// <summary>

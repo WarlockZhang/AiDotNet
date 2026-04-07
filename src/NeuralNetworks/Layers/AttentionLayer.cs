@@ -398,6 +398,27 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     }
 
     /// <summary>
+    /// Declares named input ports for this multi-input layer.
+    /// </summary>
+    public override IReadOnlyList<LayerPort> InputPorts =>
+    [
+        new LayerPort("input", GetInputShape()),
+        new LayerPort("context", GetInputShape(), Required: false)
+    ];
+
+    /// <summary>
+    /// Named multi-input forward pass.
+    /// </summary>
+    public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
+    {
+        if (!inputs.TryGetValue("input", out var input))
+            throw new ArgumentException("AttentionLayer requires an 'input'.", nameof(inputs));
+        if (inputs.TryGetValue("context", out var context))
+            return Forward(input, context);
+        return Forward(input);
+    }
+
+    /// <summary>
     /// Performs the forward pass of the attention mechanism.
     /// </summary>
     /// <param name="input">The input tensor to the layer.</param>

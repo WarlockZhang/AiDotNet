@@ -717,6 +717,27 @@ public partial class MemoryWriteLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     }
 
     /// <summary>
+    /// Declares named input ports for this multi-input layer.
+    /// </summary>
+    public override IReadOnlyList<LayerPort> InputPorts =>
+    [
+        new LayerPort("input", GetInputShape()),
+        new LayerPort("memory", GetInputShape())
+    ];
+
+    /// <summary>
+    /// Named multi-input forward pass.
+    /// </summary>
+    public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
+    {
+        if (!inputs.TryGetValue("input", out var input))
+            throw new ArgumentException("MemoryWriteLayer requires 'input'.", nameof(inputs));
+        if (!inputs.TryGetValue("memory", out var memory))
+            throw new ArgumentException("MemoryWriteLayer requires 'memory'.", nameof(inputs));
+        return Forward(input, memory);
+    }
+
+    /// <summary>
     /// Performs the forward pass of the memory write layer with just the input tensor.
     /// </summary>
     /// <param name="input">The input tensor to process.</param>
