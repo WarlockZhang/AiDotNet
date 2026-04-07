@@ -689,10 +689,10 @@ public class TransformerDecoderLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
         if (inputs == null) throw new ArgumentNullException(nameof(inputs));
-        if (!inputs.TryGetValue("decoder_input", out var decoderInput))
+        if (!inputs.TryGetValue("decoder_input", out var decoderInput) || decoderInput == null)
             throw new ArgumentException("TransformerDecoderLayer requires 'decoder_input'.", nameof(inputs));
         // encoder_output optional — falls back to decoder-only mode
-        if (!inputs.TryGetValue("encoder_output", out var encoderOutput))
+        if (!inputs.TryGetValue("encoder_output", out var encoderOutput) || encoderOutput == null)
             return Forward(decoderInput, decoderInput);
         return Forward(decoderInput, encoderOutput);
     }

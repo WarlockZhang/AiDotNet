@@ -191,12 +191,17 @@ public partial class CrossAttentionLayer<T> : LayerBase<T>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
         if (inputs == null) throw new ArgumentNullException(nameof(inputs));
-        if (!inputs.TryGetValue("query", out var query))
-            throw new ArgumentException("CrossAttentionLayer requires a 'query' input.", nameof(inputs));
+        if (!inputs.TryGetValue("query", out var query) || query == null)
+            throw new ArgumentException("CrossAttentionLayer requires a non-null 'query' input.", nameof(inputs));
 
-        // Context is optional — defaults to query for self-attention
-        if (!inputs.TryGetValue("context", out var context))
+        // Context is optional — defaults to query for self-attention only when dimensions match
+        if (!inputs.TryGetValue("context", out var context) || context == null)
+        {
+            if (_queryDim != _contextDim)
+                throw new ArgumentException(
+                    $"CrossAttentionLayer requires 'context' when queryDim ({_queryDim}) != contextDim ({_contextDim}).", nameof(inputs));
             context = query;
+        }
 
         return ForwardCrossAttention(query, context);
     }
