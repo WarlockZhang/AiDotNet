@@ -587,6 +587,7 @@ public class DecoderLayer<T> : LayerBase<T>
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
+        if (inputs == null) throw new ArgumentNullException(nameof(inputs));
         if (!inputs.TryGetValue("decoder_input", out var decoderInput))
             throw new ArgumentException("DecoderLayer requires 'decoder_input'.", nameof(inputs));
         if (!inputs.TryGetValue("encoder_output", out var encoderOutput))

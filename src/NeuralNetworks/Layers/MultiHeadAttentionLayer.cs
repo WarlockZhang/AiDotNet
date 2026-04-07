@@ -659,6 +659,7 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
+        if (inputs == null) throw new ArgumentNullException(nameof(inputs));
         if (!inputs.TryGetValue("query", out var query))
             throw new ArgumentException("MultiHeadAttentionLayer requires a 'query' input.", nameof(inputs));
         inputs.TryGetValue("key", out var key);

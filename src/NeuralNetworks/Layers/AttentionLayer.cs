@@ -411,6 +411,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
+        if (inputs == null) throw new ArgumentNullException(nameof(inputs));
         if (!inputs.TryGetValue("input", out var input))
             throw new ArgumentException("AttentionLayer requires an 'input'.", nameof(inputs));
         if (inputs.TryGetValue("context", out var context))

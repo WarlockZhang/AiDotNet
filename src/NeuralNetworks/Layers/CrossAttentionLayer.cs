@@ -1,4 +1,4 @@
-﻿using AiDotNet.ActivationFunctions;
+using AiDotNet.ActivationFunctions;
 using AiDotNet.Attributes;
 using AiDotNet.Autodiff;
 using AiDotNet.Enums;
@@ -190,6 +190,7 @@ public partial class CrossAttentionLayer<T> : LayerBase<T>
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
+        if (inputs == null) throw new ArgumentNullException(nameof(inputs));
         if (!inputs.TryGetValue("query", out var query))
             throw new ArgumentException("CrossAttentionLayer requires a 'query' input.", nameof(inputs));
 

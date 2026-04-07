@@ -734,6 +734,7 @@ public partial class MemoryWriteLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
+        if (inputs == null) throw new ArgumentNullException(nameof(inputs));
         if (!inputs.TryGetValue("input", out var input))
             throw new ArgumentException("MemoryWriteLayer requires 'input'.", nameof(inputs));
         // Memory is optional — falls back to empty memory (parity with Forward(Tensor<T>))

@@ -605,6 +605,7 @@ public partial class MemoryReadLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
+        if (inputs == null) throw new ArgumentNullException(nameof(inputs));
         if (!inputs.TryGetValue("query", out var query))
             throw new ArgumentException("MemoryReadLayer requires 'query'.", nameof(inputs));
         // Memory is optional — falls back to default memory (parity with Forward(Tensor<T>))

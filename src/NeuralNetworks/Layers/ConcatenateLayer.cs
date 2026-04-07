@@ -461,6 +461,7 @@ public class ConcatenateLayer<T> : LayerBase<T>
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
+        if (inputs == null) throw new ArgumentNullException(nameof(inputs));
         // Collect all matching input_N keys (don't break on gaps — collect all)
         var ordered = new List<(int index, Tensor<T> tensor)>();
         foreach (var kvp in inputs)

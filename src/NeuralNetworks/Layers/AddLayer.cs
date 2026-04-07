@@ -271,6 +271,7 @@ public class AddLayer<T> : LayerBase<T>
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
+        if (inputs == null) throw new ArgumentNullException(nameof(inputs));
         var ordered = new List<(int index, Tensor<T> tensor)>();
         foreach (var kvp in inputs)
         {
