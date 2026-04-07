@@ -690,8 +690,9 @@ public class TransformerDecoderLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     {
         if (!inputs.TryGetValue("decoder_input", out var decoderInput))
             throw new ArgumentException("TransformerDecoderLayer requires 'decoder_input'.", nameof(inputs));
+        // encoder_output optional — falls back to decoder-only mode (parity with Forward(Tensor<T>))
         if (!inputs.TryGetValue("encoder_output", out var encoderOutput))
-            throw new ArgumentException("TransformerDecoderLayer requires 'encoder_output'.", nameof(inputs));
+            return Forward(decoderInput, decoderInput);
         return Forward(decoderInput, encoderOutput);
     }
 

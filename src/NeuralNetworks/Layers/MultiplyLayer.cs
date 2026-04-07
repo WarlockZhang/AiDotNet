@@ -209,17 +209,16 @@ public class MultiplyLayer<T> : LayerBase<T>
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
-        var ordered = new List<Tensor<T>>();
-        for (int i = 0; ; i++)
+        var ordered = new List<(int index, Tensor<T> tensor)>();
+        foreach (var kvp in inputs)
         {
-            if (inputs.TryGetValue($"input_{i}", out var t))
-                ordered.Add(t);
-            else
-                break;
+            if (kvp.Key.StartsWith("input_") && int.TryParse(kvp.Key.AsSpan(6), out int idx))
+                ordered.Add((idx, kvp.Value));
         }
+        ordered.Sort((a, b) => a.index.CompareTo(b.index));
         if (ordered.Count < 2)
             throw new ArgumentException("MultiplyLayer requires at least 'input_0' and 'input_1'.", nameof(inputs));
-        return Forward(ordered.ToArray());
+        return Forward(ordered.Select(x => x.tensor).ToArray());
     }
 
     /// <summary>

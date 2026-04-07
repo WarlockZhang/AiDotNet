@@ -736,8 +736,9 @@ public partial class MemoryWriteLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     {
         if (!inputs.TryGetValue("input", out var input))
             throw new ArgumentException("MemoryWriteLayer requires 'input'.", nameof(inputs));
+        // Memory is optional — falls back to empty memory (parity with Forward(Tensor<T>))
         if (!inputs.TryGetValue("memory", out var memory))
-            throw new ArgumentException("MemoryWriteLayer requires 'memory'.", nameof(inputs));
+            return Forward(input);
         return Forward(input, memory);
     }
 

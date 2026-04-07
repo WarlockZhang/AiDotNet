@@ -607,8 +607,9 @@ public partial class MemoryReadLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     {
         if (!inputs.TryGetValue("query", out var query))
             throw new ArgumentException("MemoryReadLayer requires 'query'.", nameof(inputs));
+        // Memory is optional — falls back to default memory (parity with Forward(Tensor<T>))
         if (!inputs.TryGetValue("memory", out var memory))
-            throw new ArgumentException("MemoryReadLayer requires 'memory'.", nameof(inputs));
+            return Forward(query);
         return Forward(query, memory);
     }
 
