@@ -51,6 +51,7 @@ public partial class BatchEnsembleLayer<T> : LayerBase<T>
     [TrainableParameter(Role = PersistentTensorRole.Weights)]
 
     private Tensor<T> _weights;      // Shape: [inputDim, outputDim]
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
     private Tensor<T>? _bias;        // Shape: [outputDim] (shared across members)
 
     // Per-member rank vectors
