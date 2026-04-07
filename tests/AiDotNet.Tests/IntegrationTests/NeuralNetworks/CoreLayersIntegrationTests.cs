@@ -219,6 +219,104 @@ public class CoreLayersIntegrationTests
         Assert.True(loss > 0, "L2 regularization loss should be positive");
     }
 
+    [Fact]
+    public void DenseLayer_TrainingVsInferenceMode_ProduceSameOutputValues_ReLU()
+    {
+        // PR change: training mode uses separate pre-activation path; inference uses fused path.
+        // The numerical output must be identical regardless of which internal path is taken.
+        int inputSize = 16;
+        int outputSize = 8;
+        var layer = new DenseLayer<float>(inputSize, outputSize,
+            (IActivationFunction<float>)new ReLUActivation<float>());
+        var input = Create2DInput(2, inputSize, seed: 7);
+
+        // Act — training mode (default)
+        layer.SetTrainingMode(true);
+        var trainOutput = layer.Forward(input);
+
+        // Act — inference mode
+        layer.SetTrainingMode(false);
+        var inferOutput = layer.Forward(input);
+
+        // Assert — both paths must yield the same values
+        Assert.Equal(trainOutput.Shape.ToArray(), inferOutput.Shape.ToArray());
+        for (int i = 0; i < trainOutput.Length; i++)
+        {
+            Assert.Equal(trainOutput[i], inferOutput[i], Tolerance);
+        }
+    }
+
+    [Fact]
+    public void DenseLayer_TrainingVsInferenceMode_ProduceSameOutputValues_Sigmoid()
+    {
+        // Sigmoid has a known FusedActivationType, so the inference path differs from training.
+        // Both must still yield numerically equivalent results.
+        int inputSize = 12;
+        int outputSize = 6;
+        var layer = new DenseLayer<float>(inputSize, outputSize,
+            (IActivationFunction<float>)new SigmoidActivation<float>());
+        var input = Create2DInput(3, inputSize, seed: 99);
+
+        layer.SetTrainingMode(true);
+        var trainOutput = layer.Forward(input);
+
+        layer.SetTrainingMode(false);
+        var inferOutput = layer.Forward(input);
+
+        Assert.Equal(trainOutput.Shape.ToArray(), inferOutput.Shape.ToArray());
+        for (int i = 0; i < trainOutput.Length; i++)
+        {
+            Assert.Equal(trainOutput[i], inferOutput[i], 1e-4f);
+        }
+    }
+
+    [Fact]
+    public void DenseLayer_InferenceMode_WithIdentityActivation_ProducesCorrectShape()
+    {
+        // Identity activation has no fused type (FusedActivationType.None),
+        // so even in inference mode the else-branch is taken — verifies that path.
+        int inputSize = 8;
+        int outputSize = 4;
+        var layer = new DenseLayer<float>(inputSize, outputSize,
+            (IActivationFunction<float>)new IdentityActivation<float>());
+        var input = Create2DInput(2, inputSize);
+
+        layer.SetTrainingMode(false);
+        var output = layer.Forward(input);
+
+        Assert.Equal(2, output.Rank);
+        Assert.Equal(2, output.Shape[0]);
+        Assert.Equal(outputSize, output.Shape[1]);
+    }
+
+    [Fact]
+    public void DenseLayer_SwitchingTrainingMode_DoesNotCorruptWeights()
+    {
+        // Switching modes between calls must not corrupt the layer's weight state.
+        int inputSize = 8;
+        int outputSize = 4;
+        var layer = new DenseLayer<float>(inputSize, outputSize,
+            (IActivationFunction<float>)new ReLUActivation<float>());
+        var input = Create2DInput(1, inputSize, seed: 11);
+
+        // Forward in training mode
+        layer.SetTrainingMode(true);
+        var out1 = layer.Forward(input);
+
+        // Forward in inference mode
+        layer.SetTrainingMode(false);
+        var out2 = layer.Forward(input);
+
+        // Switch back to training mode — must still produce the same values
+        layer.SetTrainingMode(true);
+        var out3 = layer.Forward(input);
+
+        for (int i = 0; i < out1.Length; i++)
+        {
+            Assert.Equal(out1[i], out3[i], Tolerance);
+        }
+    }
+
     #endregion
 
     #region ConvolutionalLayer Tests
