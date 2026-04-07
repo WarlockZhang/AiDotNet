@@ -53,7 +53,9 @@ public sealed class ComponentDependencyAttribute : Attribute
     /// <param name="description">Description of why this dependency is needed.</param>
     public ComponentDependencyAttribute(Type dependencyType, string description)
     {
-        DependencyType = dependencyType;
+        DependencyType = dependencyType ?? throw new ArgumentNullException(nameof(dependencyType));
+        if (string.IsNullOrWhiteSpace(description))
+            throw new ArgumentException("Dependency description must not be empty.", nameof(description));
         Description = description;
     }
 }
