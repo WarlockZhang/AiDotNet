@@ -100,10 +100,10 @@ public abstract class ChunkerTestBase
         // Every substring of the original text that doesn't span a chunk boundary
         // should be findable in at least one chunk. We verify that each word from
         // the original text appears in at least one chunk.
-        var words = SampleText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var words = SampleText.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
         foreach (var word in words)
         {
-            bool found = chunks.Any(chunk => chunk.Contains(word, StringComparison.Ordinal));
+            bool found = chunks.Any(chunk => chunk.IndexOf(word, StringComparison.Ordinal) >= 0);
             Assert.True(found,
                 $"Word '{word}' from the original text was not found in any chunk. " +
                 "Chunker may be losing content at boundaries.");
