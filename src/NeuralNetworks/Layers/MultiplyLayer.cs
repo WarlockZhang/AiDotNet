@@ -196,11 +196,13 @@ public class MultiplyLayer<T> : LayerBase<T>
     /// <summary>
     /// Declares named input ports for this multi-input layer.
     /// </summary>
+    private IReadOnlyList<LayerPort>? _inputPortsCache;
     public override IReadOnlyList<LayerPort> InputPorts =>
-    [
-        new LayerPort("input_0", GetInputShape()),
-        new LayerPort("input_1", GetInputShape())
-    ];
+        _inputPortsCache ??=
+        [
+            new LayerPort("input_0", GetInputShape()),
+            new LayerPort("input_1", GetInputShape())
+        ];
 
     /// <summary>
     /// Named multi-input forward pass.

@@ -719,11 +719,15 @@ public partial class MemoryWriteLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     /// <summary>
     /// Declares named input ports for this multi-input layer.
     /// </summary>
+    private IReadOnlyList<LayerPort>? _inputPortsCache;
     public override IReadOnlyList<LayerPort> InputPorts =>
-    [
-        new LayerPort("input", GetInputShape()),
-        new LayerPort("memory", GetInputShape())
-    ];
+        _inputPortsCache ??=
+        [
+            new LayerPort("input", GetInputShape()),
+            // Memory port uses same shape as input — in practice, memory shape may differ
+            // at runtime but the port metadata uses input shape as a reasonable default.
+            new LayerPort("memory", GetInputShape())
+        ];
 
     /// <summary>
     /// Named multi-input forward pass.

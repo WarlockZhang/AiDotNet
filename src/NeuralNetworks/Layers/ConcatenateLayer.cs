@@ -448,28 +448,31 @@ public class ConcatenateLayer<T> : LayerBase<T>
     /// <summary>
     /// Declares named input ports for this multi-input layer.
     /// </summary>
+    private IReadOnlyList<LayerPort>? _inputPortsCache;
     public override IReadOnlyList<LayerPort> InputPorts =>
-    [
-        new LayerPort("input_0", GetInputShape()),
-        new LayerPort("input_1", GetInputShape())
-    ];
+        _inputPortsCache ??=
+        [
+            new LayerPort("input_0", GetInputShape()),
+            new LayerPort("input_1", GetInputShape())
+        ];
 
     /// <summary>
-    /// Named multi-input forward pass.
+    /// Named multi-input forward pass. Collects all "input_N" keys and concatenates.
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
-        var ordered = new List<Tensor<T>>();
-        for (int i = 0; ; i++)
+        // Collect all matching input_N keys (don't break on gaps — collect all)
+        var ordered = new List<(int index, Tensor<T> tensor)>();
+        foreach (var kvp in inputs)
         {
-            if (inputs.TryGetValue($"input_{i}", out var t))
-                ordered.Add(t);
-            else
-                break;
+            if (kvp.Key.StartsWith("input_") && int.TryParse(kvp.Key.AsSpan(6), out int idx))
+                ordered.Add((idx, kvp.Value));
         }
+        ordered.Sort((a, b) => a.index.CompareTo(b.index));
+
         if (ordered.Count < 2)
             throw new ArgumentException("ConcatenateLayer requires at least 'input_0' and 'input_1'.", nameof(inputs));
-        return Forward(ordered.ToArray());
+        return Forward(ordered.Select(x => x.tensor).ToArray());
     }
 
     /// <summary>

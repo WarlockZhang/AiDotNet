@@ -168,11 +168,13 @@ public partial class CrossAttentionLayer<T> : LayerBase<T>
     /// <summary>
     /// Declares named input ports: "query" (required) and "context" (optional, defaults to query for self-attention).
     /// </summary>
+    private IReadOnlyList<LayerPort>? _inputPortsCache;
     public override IReadOnlyList<LayerPort> InputPorts =>
-    [
-        new LayerPort("query", GetInputShape()),
-        new LayerPort("context", new[] { 1, _contextDim }, Required: false)
-    ];
+        _inputPortsCache ??=
+        [
+            new LayerPort("query", GetInputShape()),
+            new LayerPort("context", new[] { 1, _contextDim }, Required: false)
+        ];
 
     /// <summary>
     /// Forward pass for self-attention (not typically used for cross-attention).
