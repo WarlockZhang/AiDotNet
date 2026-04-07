@@ -88,6 +88,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/2003.06777",
     Year = 2020,
     Authors = "Chi Zhang, Yujun Cai, Guosheng Lin, Chunhua Shen")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class DeepEMDAlgorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private IParameterizable<T, TInput, TOutput>? _cachedParamModel;

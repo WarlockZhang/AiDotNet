@@ -104,6 +104,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/1605.06065",
     Year = 2016,
     Authors = "Adam Santoro, Sergey Bartunov, Matthew Botvinick, Daan Wierstra, Timothy Lillicrap")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class MANNAlgorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private readonly MANNOptions<T, TInput, TOutput> _mannOptions;

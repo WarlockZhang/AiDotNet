@@ -53,6 +53,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/2106.13228",
     Year = 2021,
     Authors = "Keunhong Park, Utkarsh Sinha, Peter Hedman, et al.")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class HyperNeRFMetaAlgorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private IParameterizable<T, TInput, TOutput>? _cachedParamModel;

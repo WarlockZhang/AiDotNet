@@ -110,6 +110,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/1805.08136",
     Year = 2019,
     Authors = "Luca Bertinetto, Joao F. Henriques, Philip H.S. Torr, Andrea Vedaldi")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class R2D2Algorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private IParameterizable<T, TInput, TOutput>? _cachedParamModel;

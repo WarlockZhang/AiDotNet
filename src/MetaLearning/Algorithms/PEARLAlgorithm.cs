@@ -51,6 +51,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/1903.08254",
     Year = 2019,
     Authors = "Kate Rakelly, Aurick Zhou, Chelsea Finn, Sergey Levine, Deirdre Quillen")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class PEARLAlgorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private IParameterizable<T, TInput, TOutput>? _cachedParamModel;

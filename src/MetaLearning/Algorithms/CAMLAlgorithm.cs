@@ -87,6 +87,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/2310.10971",
     Year = 2023,
     Authors = "Christopher Fifty, Dennis Duan, Ronald G. Junkins, et al.")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class CAMLAlgorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private IParameterizable<T, TInput, TOutput>? _cachedParamModel;

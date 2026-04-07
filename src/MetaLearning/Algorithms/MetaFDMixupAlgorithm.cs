@@ -48,6 +48,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/2001.08735",
     Year = 2021,
     Authors = "Jiechao Guan, Zhiwu Lu, Tao Xiang, Ji-Rong Wen")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class MetaFDMixupAlgorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private IParameterizable<T, TInput, TOutput>? _cachedParamModel;

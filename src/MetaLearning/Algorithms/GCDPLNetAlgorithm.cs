@@ -49,6 +49,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/2003.13552",
     Year = 2020,
     Authors = "Tianshi Li, Zhixiang Chi, Yang Wang, et al.")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class GCDPLNetAlgorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private IParameterizable<T, TInput, TOutput>? _cachedParamModel;

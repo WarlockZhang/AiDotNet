@@ -36,6 +36,8 @@ namespace AiDotNet.MetaLearning.Modules;
     "https://arxiv.org/abs/1711.06025",
     Year = 2018,
     Authors = "Sung, F., Yang, Y., Zhang, L., Xiang, T., Torr, P. H. S., & Hospedales, T. M.")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class RelationModule<T> : ModelBase<T, Tensor<T>, Tensor<T>>
 {
     // NumOps inherited from ModelBase

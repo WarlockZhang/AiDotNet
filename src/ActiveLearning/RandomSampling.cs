@@ -33,6 +33,8 @@ namespace AiDotNet.ActiveLearning;
 [ModelComplexity(ModelComplexity.Low)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("Active Learning Literature Survey", "https://minds.wisconsin.edu/handle/1793/60660", Year = 2009, Authors = "Burr Settles")]
+[ComponentType(ComponentType.ActiveLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class RandomSampling<T> : IActiveLearningStrategy<T>
 {
     private readonly INumericOperations<T> _numOps;

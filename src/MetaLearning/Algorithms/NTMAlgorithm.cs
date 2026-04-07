@@ -110,6 +110,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/1410.5401",
     Year = 2014,
     Authors = "Alex Graves, Greg Wayne, Ivo Danihelka")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class NTMAlgorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private readonly NTMOptions<T, TInput, TOutput> _ntmOptions;

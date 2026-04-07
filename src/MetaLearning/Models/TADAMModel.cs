@@ -38,6 +38,8 @@ namespace AiDotNet.MetaLearning.Models;
     "https://arxiv.org/abs/1805.10123",
     Year = 2018,
     Authors = "Oreshkin, B. N., Rodriguez, P., & Lacoste, A.")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class TADAMModel<T, TInput, TOutput> : IModel<TInput, TOutput, ModelMetadata<T>>
 {
     private static readonly INumericOperations<T> NumOps = MathHelper.GetNumericOperations<T>();

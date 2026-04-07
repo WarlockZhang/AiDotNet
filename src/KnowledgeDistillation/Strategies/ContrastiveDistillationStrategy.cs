@@ -78,6 +78,8 @@ namespace AiDotNet.KnowledgeDistillation.Strategies;
     "https://arxiv.org/abs/1910.10699",
     Year = 2020,
     Authors = "Yonglong Tian, Dilip Krishnan, Phillip Isola")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class ContrastiveDistillationStrategy<T> : DistillationStrategyBase<T>, IIntermediateActivationStrategy<T>
 {
     private readonly double _contrastiveWeight;

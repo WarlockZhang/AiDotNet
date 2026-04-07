@@ -57,6 +57,8 @@ namespace AiDotNet.KnowledgeDistillation.Strategies;
     "https://dl.acm.org/doi/10.1145/1553374.1553380",
     Year = 2009,
     Authors = "Yoshua Bengio, Jérôme Louradour, Ronan Collobert, Jason Weston")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class EasyToHardCurriculumStrategy<T> : CurriculumDistillationStrategyBase<T>
 {
     /// <summary>

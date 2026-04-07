@@ -21,6 +21,8 @@ namespace AiDotNet.KnowledgeDistillation.Teachers;
     "https://arxiv.org/abs/1804.03235",
     Year = 2018,
     Authors = "Rohan Anil, Gabriel Pereyra, Alexandre Passos, et al.")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class DistributedTeacherModel<T> : TeacherModelBase<Vector<T>, Vector<T>, T>
 {
     private readonly ITeacherModel<Vector<T>, Vector<T>>[] _workers;

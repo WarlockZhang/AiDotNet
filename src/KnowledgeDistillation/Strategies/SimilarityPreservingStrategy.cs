@@ -21,6 +21,8 @@ namespace AiDotNet.KnowledgeDistillation.Strategies;
     "https://arxiv.org/abs/1907.09682",
     Year = 2019,
     Authors = "Frederick Tung, Greg Mori")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class SimilarityPreservingStrategy<T> : DistillationStrategyBase<T>
 {
     private readonly double _similarityWeight;

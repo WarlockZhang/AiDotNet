@@ -46,6 +46,8 @@ namespace AiDotNet.MetaLearning.Models;
     "https://arxiv.org/abs/2008.08882",
     Year = 2021,
     Authors = "Oh, J., Yoo, H., Kim, C., & Yun, S.")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class BOILModel<T, TInput, TOutput> : IModel<TInput, TOutput, ModelMetadata<T>>
 {
     private static readonly INumericOperations<T> NumOps = MathHelper.GetNumericOperations<T>();

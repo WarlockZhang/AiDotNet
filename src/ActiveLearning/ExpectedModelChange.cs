@@ -40,6 +40,8 @@ namespace AiDotNet.ActiveLearning;
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("Multiple-Instance Active Learning", "https://dl.acm.org/doi/10.5555/1390156.1390273", Year = 2008, Authors = "Burr Settles, Mark Craven, Soumya Ray")]
+[ComponentType(ComponentType.ActiveLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class ExpectedModelChange<T> : IActiveLearningStrategy<T>
 {
     private readonly INumericOperations<T> _numOps;

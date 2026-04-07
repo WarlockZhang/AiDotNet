@@ -29,6 +29,8 @@ namespace AiDotNet.KnowledgeDistillation.Teachers;
     "https://arxiv.org/abs/1805.04770",
     Year = 2018,
     Authors = "Tommaso Furlanello, Zachary C. Lipton, Michael Tschannen, et al.")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class SelfTeacherModel<T> : TeacherModelBase<Vector<T>, Vector<T>, T>
 {
     private Vector<T>[]? _cachedPredictions;

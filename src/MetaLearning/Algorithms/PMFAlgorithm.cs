@@ -50,6 +50,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/2204.07305",
     Year = 2022,
     Authors = "Shell Xu Hu, Da Li, Jan Stuhmer, Minyoung Kim, Timothy M. Hospedales")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class PMFAlgorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private IParameterizable<T, TInput, TOutput>? _cachedParamModel;

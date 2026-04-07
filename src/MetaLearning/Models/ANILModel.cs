@@ -45,6 +45,8 @@ namespace AiDotNet.MetaLearning.Models;
     "https://arxiv.org/abs/1909.09157",
     Year = 2020,
     Authors = "Raghu, A., Raghu, M., Bengio, S., & Vinyals, O.")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class ANILModel<T, TInput, TOutput> : IModel<TInput, TOutput, ModelMetadata<T>>
 {
     private readonly IFullModel<T, TInput, TOutput> _featureExtractor;
