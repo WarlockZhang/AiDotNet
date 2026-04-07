@@ -210,6 +210,7 @@ public partial class PaTHAttentionLayer<T> : LayerBase<T>
         InitializeTensor2D(_keyWeights);
         InitializeTensor2D(_valueWeights);
         InitializeHouseholderVectors();
+        RegisterTrainableParameter(_householderVectors, PersistentTensorRole.Weights);
         InitializeTensor2D(_outputGateWeights);
         _outputGateBias.Fill(NumOps.Zero);
         InitializeTensor2D(_outputProjectionWeights);
@@ -543,15 +544,6 @@ public partial class PaTHAttentionLayer<T> : LayerBase<T>
         _outputGateBias = Engine.TensorAdd(_outputGateBias, Engine.TensorMultiplyScalar(_outputGateBiasGradient!, negLR));
         _outputProjectionWeights = Engine.TensorAdd(_outputProjectionWeights, Engine.TensorMultiplyScalar(_outputProjectionWeightsGradient!, negLR));
         _outputProjectionBias = Engine.TensorAdd(_outputProjectionBias, Engine.TensorMultiplyScalar(_outputProjectionBiasGradient!, negLR));
-
-        // Register trainable parameters for tape-based autodiff
-        RegisterTrainableParameter(_queryWeights, PersistentTensorRole.Weights);
-        RegisterTrainableParameter(_keyWeights, PersistentTensorRole.Weights);
-        RegisterTrainableParameter(_valueWeights, PersistentTensorRole.Weights);
-        RegisterTrainableParameter(_outputGateWeights, PersistentTensorRole.Weights);
-        RegisterTrainableParameter(_outputGateBias, PersistentTensorRole.Biases);
-        RegisterTrainableParameter(_outputProjectionWeights, PersistentTensorRole.Weights);
-        RegisterTrainableParameter(_outputProjectionBias, PersistentTensorRole.Biases);
 
     }
 

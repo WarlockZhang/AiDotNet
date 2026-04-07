@@ -477,7 +477,8 @@ public partial class FeedForwardLayer<T> : LayerBase<T>
     /// </remarks>
     public override void UpdateParameters(T learningRate)
     {
-        if (_weightsGradient == null || _biasesGradient == null)
+        if (_weightsGradient == null || _biasesGradient == null ||
+            _weightsGradient.Length == 0 || _biasesGradient.Length == 0)
             throw new InvalidOperationException("Backward pass must be called before updating parameters.");
         _weights = _weights.Subtract(_weightsGradient.Multiply(learningRate));
         _biases = _biases.Subtract(_biasesGradient.Multiply(learningRate));

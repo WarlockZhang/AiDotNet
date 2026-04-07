@@ -354,6 +354,11 @@ public partial class Mamba2Block<T> : LayerBase<T>
 
         _normGamma.Fill(NumOps.One);
         _normBeta.Fill(NumOps.Zero);
+
+        RegisterTrainableParameter(_aLog, PersistentTensorRole.Weights);
+        RegisterTrainableParameter(_dParam, PersistentTensorRole.Weights);
+        RegisterTrainableParameter(_normGamma, PersistentTensorRole.Weights);
+        RegisterTrainableParameter(_normBeta, PersistentTensorRole.Biases);
     }
 
     private void InitializeTensor(Tensor<T> tensor)

@@ -138,6 +138,7 @@ public partial class SoftTreeLayer<T> : LayerBase<T>
         // Register after initialization so tensor references are final
         RegisterTrainableParameter(_splitWeights, PersistentTensorRole.Weights);
         RegisterTrainableParameter(_splitBiases, PersistentTensorRole.Biases);
+        RegisterTrainableParameter(_leafValues, PersistentTensorRole.Weights);
     }
 
     /// <summary>
