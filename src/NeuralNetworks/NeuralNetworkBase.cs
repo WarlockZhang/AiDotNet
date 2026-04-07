@@ -2531,8 +2531,37 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             // Debug: tape entries after loss computation
             _forwardTapeEntriesAfter = tape.EntryCount;
 
-            // Compute gradients
-            var grads = tape.ComputeGradients(lossTensor, trainableParams);
+            // Debug: verify trainableParams match what layers currently have
+            _lastParamViewMatch = true;
+            foreach (var layer in Layers)
+            {
+                if (layer is ITrainableLayer<T> tl)
+                {
+                    var current = tl.GetTrainableParameters();
+                    for (int p = 0; p < current.Count; p++)
+                    {
+                        bool found = false;
+                        foreach (var tp in trainableParams)
+                        {
+                            if (ReferenceEquals(tp, current[p])) { found = true; break; }
+                        }
+                        if (!found) { _lastParamViewMatch = false; break; }
+                    }
+                }
+            }
+
+            // Compute gradients — pass null sources to get ALL gradients (debug)
+            var allGrads = tape.ComputeGradients(lossTensor, sources: null);
+            _lastAllGradsCount = allGrads.Count;
+
+            // Filter to just trainable params
+            var grads = new Dictionary<Tensor<T>, Tensor<T>>(
+                Helpers.TensorReferenceComparer<Tensor<T>>.Instance);
+            foreach (var param in trainableParams)
+            {
+                if (allGrads.TryGetValue(param, out var grad))
+                    grads[param] = grad;
+            }
 
             T lossValue = lossTensor.Length > 0 ? lossTensor[0] : NumOps.Zero;
             LastLoss = lossValue;
@@ -2673,6 +2702,8 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     internal int _forwardTapeEntriesAfter;
     internal int _lastNonZeroGradCount;
     internal bool _lastLossHasGradFn;
+    internal bool _lastParamViewMatch;
+    internal int _lastAllGradsCount;
 
     /// <summary>
     /// Original tensor references saved before buffer view replacement.

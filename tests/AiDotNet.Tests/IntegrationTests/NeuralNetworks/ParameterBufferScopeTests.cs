@@ -161,6 +161,8 @@ public class ParameterBufferScopeTests
                 $"ForwardTapeEntriesAfter: {network._forwardTapeEntriesAfter}\n" +
                 $"NonZeroGrads: {network._lastNonZeroGradCount}\n" +
                 $"LossHasGradFn: {network._lastLossHasGradFn}\n" +
+                $"ParamViewMatch: {network._lastParamViewMatch}\n" +
+                $"AllGradsCount: {network._lastAllGradsCount}\n" +
                 $"Before: {string.Join(" | ", debugBefore)}\n" +
                 $"After:  {string.Join(" | ", debugAfter)}");
         }
