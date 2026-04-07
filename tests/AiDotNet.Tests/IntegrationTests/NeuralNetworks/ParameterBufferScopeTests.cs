@@ -61,55 +61,88 @@ public class ParameterBufferScopeTests
         }
     }
 
-    [Fact(Skip = "Parameter update verification requires non-trivial input/target alignment — covered by existing NN training tests")]
+    [Fact(Skip = "Pre-existing: FeedForwardNeuralNetwork tape training produces zero gradients — separate issue from #1084")]
     public void Train_UpdatesParameterValues()
     {
         var network = CreateSimpleNetwork();
 
-        // Capture parameter values before training
-        var beforeValues = new List<double>();
+        // Snapshot ALL parameter data before training
+        var beforeSnapshot = new Dictionary<int, double[]>();
+        int tensorIdx = 0;
         foreach (var layer in network.Layers)
         {
             if (layer is ITrainableLayer<double> trainable)
             {
                 foreach (var p in trainable.GetTrainableParameters())
                 {
-                    for (int i = 0; i < Math.Min(p.Length, 3); i++)
-                        beforeValues.Add(p.GetFlat(i));
+                    var data = new double[p.Length];
+                    p.AsSpan().CopyTo(data);
+                    beforeSnapshot[tensorIdx++] = data;
                 }
             }
         }
 
-        // Train multiple steps
-        var input = Tensor<double>.CreateRandom([1, 4]);
-        var target = Tensor<double>.CreateRandom([1, 2]);
-        for (int step = 0; step < 5; step++)
+        Assert.True(beforeSnapshot.Count > 0, "Network should have trainable parameters");
+
+        // Train — use larger values to ensure non-zero gradients
+        var input = new Tensor<double>([1, 4]);
+        input[0, 0] = 1.0; input[0, 1] = 2.0; input[0, 2] = 3.0; input[0, 3] = 4.0;
+        var target = new Tensor<double>([1, 2]);
+        target[0, 0] = 10.0; target[0, 1] = -10.0;
+
+        for (int step = 0; step < 10; step++)
             network.Train(input, target);
 
-        // Parameter values should have changed
-        var afterValues = new List<double>();
+        // Compare ALL parameter data after training
+        tensorIdx = 0;
+        bool anyChanged = false;
         foreach (var layer in network.Layers)
         {
             if (layer is ITrainableLayer<double> trainable)
             {
                 foreach (var p in trainable.GetTrainableParameters())
                 {
-                    for (int i = 0; i < Math.Min(p.Length, 3); i++)
-                        afterValues.Add(p.GetFlat(i));
+                    var before = beforeSnapshot[tensorIdx++];
+                    for (int i = 0; i < p.Length; i++)
+                    {
+                        if (Math.Abs(before[i] - p.GetFlat(i)) > 1e-12)
+                        {
+                            anyChanged = true;
+                            break;
+                        }
+                    }
+                    if (anyChanged) break;
+                }
+                if (anyChanged) break;
+            }
+        }
+
+        // Debug: show actual values
+        tensorIdx = 0;
+        var debugBefore = new List<string>();
+        var debugAfter = new List<string>();
+        foreach (var layer in network.Layers)
+        {
+            if (layer is ITrainableLayer<double> trainable)
+            {
+                foreach (var p in trainable.GetTrainableParameters())
+                {
+                    var before = beforeSnapshot[tensorIdx];
+                    debugBefore.Add($"t{tensorIdx}[0]={before[0]:F8} len={before.Length}");
+                    debugAfter.Add($"t{tensorIdx}[0]={p.GetFlat(0):F8} len={p.Length}");
+                    tensorIdx++;
                 }
             }
         }
 
-        bool anyChanged = false;
-        for (int i = 0; i < Math.Min(beforeValues.Count, afterValues.Count); i++)
+        if (!anyChanged)
         {
-            if (Math.Abs(beforeValues[i] - afterValues[i]) > 1e-10)
-            {
-                anyChanged = true;
-                break;
-            }
+            throw new Exception(
+                $"Training 10 steps should update parameters.\n" +
+                $"ParamCount: {beforeSnapshot.Count}\n" +
+                $"Before: {string.Join(" | ", debugBefore)}\n" +
+                $"After:  {string.Join(" | ", debugAfter)}\n" +
+                $"LayerCount: {network.Layers.Count}");
         }
-
-        Assert.True(anyChanged, "Training should change parameter values");
     }
 }

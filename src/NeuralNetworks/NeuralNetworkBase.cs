@@ -2762,7 +2762,10 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
                 for (int i = 0; i < Math.Min(originals.Count, currentViews.Count); i++)
                 {
                     // Copy updated weights from view back to original tensor
-                    currentViews[i].AsSpan().CopyTo(originals[i].AsWritableSpan());
+                    var view = currentViews[i];
+                    var orig = originals[i];
+                    for (int j = 0; j < Math.Min(view.Length, orig.Length); j++)
+                        orig.SetFlat(j, view.GetFlat(j));
                 }
 
                 // Restore original tensor references
