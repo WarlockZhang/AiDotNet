@@ -19,7 +19,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Latent Bottleneck Attentive Neural Processes",
+[ResearchPaper("Latent Bottleneck Attentive Neural Processes",
     "https://arxiv.org/abs/2211.08458",
     Year = 2023,
     Authors = "Leo Feng, Hossein Hajimirsadeghi, Yoshua Bengio, Mohamed Osama Ahmed")]

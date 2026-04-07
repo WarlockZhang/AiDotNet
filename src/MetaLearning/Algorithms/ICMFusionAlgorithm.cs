@@ -48,7 +48,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Editing Models with Task Arithmetic",
+[ResearchPaper("Editing Models with Task Arithmetic",
     "https://arxiv.org/abs/2212.04089",
     Year = 2023,
     Authors = "Gabriel Ilharco, Marco Tulio Ribeiro, Mitchell Wortsman, et al.")]

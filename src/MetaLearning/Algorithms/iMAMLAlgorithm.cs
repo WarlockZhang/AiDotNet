@@ -62,7 +62,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Meta-Learning with Implicit Gradients",
+[ResearchPaper("Meta-Learning with Implicit Gradients",
     "https://arxiv.org/abs/1909.04630",
     Year = 2019,
     Authors = "Aravind Rajeswaran, Chelsea Finn, Sham M. Kakade, Sergey Levine")]

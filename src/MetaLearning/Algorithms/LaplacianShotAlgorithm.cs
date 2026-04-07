@@ -71,7 +71,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Laplacian Regularized Few-Shot Learning",
+[ResearchPaper("Laplacian Regularized Few-Shot Learning",
     "https://arxiv.org/abs/2006.15486",
     Year = 2020,
     Authors = "Imtiaz Masud Ziko, Jose Dolz, Eric Granger, Ismail Ben Ayed")]

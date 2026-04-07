@@ -50,7 +50,7 @@ namespace AiDotNet.KnowledgeDistillation;
 [ModelTask(ModelTask.Compression)]
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("FitNets: Hints for Thin Deep Nets",
+[ResearchPaper("FitNets: Hints for Thin Deep Nets",
     "https://arxiv.org/abs/1412.6550",
     Year = 2015,
     Authors = "Adriana Romero, Nicolas Ballas, Samira Ebrahimi Kahou, et al.")]

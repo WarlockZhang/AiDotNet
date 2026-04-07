@@ -38,7 +38,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Gridded Transformer Neural Processes for Large Unstructured Spatio-Temporal Data",
+[ResearchPaper("Gridded Transformer Neural Processes for Large Unstructured Spatio-Temporal Data",
     "https://arxiv.org/abs/2305.18301",
     Year = 2024,
     Authors = "Ashman, M., Diaconu, C., Kim, J., Sherborne, J., Sherborne, T., & Turner, R. E.")]

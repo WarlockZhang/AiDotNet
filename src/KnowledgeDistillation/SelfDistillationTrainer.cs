@@ -57,7 +57,7 @@ namespace AiDotNet.KnowledgeDistillation;
 [ModelTask(ModelTask.Compression)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Born Again Neural Networks",
+[ResearchPaper("Born Again Neural Networks",
     "https://arxiv.org/abs/1805.04770",
     Year = 2018,
     Authors = "Tommaso Furlanello, Zachary C. Lipton, Michael Tschannen, et al.")]

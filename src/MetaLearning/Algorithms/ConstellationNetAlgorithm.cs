@@ -89,7 +89,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Attentive Weights Generation for Few Shot Learning via Information Maximization",
+[ResearchPaper("Attentive Weights Generation for Few Shot Learning via Information Maximization",
     "https://arxiv.org/abs/2003.03313",
     Year = 2021,
     Authors = "Yikai Wang, Chengming Xu, Chen Liu, et al.")]

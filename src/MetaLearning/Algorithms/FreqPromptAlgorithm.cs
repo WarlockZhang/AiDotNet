@@ -51,7 +51,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Visual Prompt Tuning",
+[ResearchPaper("Visual Prompt Tuning",
     "https://arxiv.org/abs/2203.12119",
     Year = 2022,
     Authors = "Menglin Jia, Luming Tang, Bor-Chun Chen, et al.")]

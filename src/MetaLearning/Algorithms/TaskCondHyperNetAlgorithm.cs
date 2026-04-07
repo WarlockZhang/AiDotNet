@@ -45,7 +45,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("HyperNetworks",
+[ResearchPaper("HyperNetworks",
     "https://arxiv.org/abs/1609.09106",
     Year = 2016,
     Authors = "Ha, D., Dai, A., & Le, Q. V.")]

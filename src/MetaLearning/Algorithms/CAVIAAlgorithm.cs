@@ -99,7 +99,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Fast Context Adaptation via Meta-Learning",
+[ResearchPaper("Fast Context Adaptation via Meta-Learning",
     "https://arxiv.org/abs/1810.03642",
     Year = 2019,
     Authors = "Luisa M. Zintgraf, Kyriacos Shiarli, Vitaly Kurin, et al.")]

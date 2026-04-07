@@ -84,7 +84,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("DeepEMD: Few-Shot Image Classification with Differentiable Earth Mover's Distance and Structured Classifiers",
+[ResearchPaper("DeepEMD: Few-Shot Image Classification with Differentiable Earth Mover's Distance and Structured Classifiers",
     "https://arxiv.org/abs/2003.06777",
     Year = 2020,
     Authors = "Chi Zhang, Yujun Cai, Guosheng Lin, Chunhua Shen")]

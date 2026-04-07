@@ -47,7 +47,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Gradient Surgery for Multi-Task Learning",
+[ResearchPaper("Gradient Surgery for Multi-Task Learning",
     "https://arxiv.org/abs/2001.06782",
     Year = 2020,
     Authors = "Tianhe Yu, Saurabh Kumar, Abhishek Gupta, Sergey Levine, Karol Hausman, Chelsea Finn")]

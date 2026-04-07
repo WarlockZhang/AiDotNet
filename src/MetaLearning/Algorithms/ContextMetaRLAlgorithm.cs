@@ -45,7 +45,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("RL²: Fast Reinforcement Learning via Slow Reinforcement Learning",
+[ResearchPaper("RL²: Fast Reinforcement Learning via Slow Reinforcement Learning",
     "https://arxiv.org/abs/1611.02779",
     Year = 2016,
     Authors = "Yan Duan, John Schulman, Xi Chen, et al.")]

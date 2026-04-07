@@ -291,7 +291,7 @@ public class TransferRandomForest<T> : TransferLearningBase<T, Matrix<T>, Vector
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Matrix<>), typeof(Vector<>))]
-[ModelPaper("Random Forests", "https://doi.org/10.1023/A:1010933404324")]
+[ResearchPaper("Random Forests", "https://doi.org/10.1023/A:1010933404324")]
 [ComponentType(ComponentType.TransferAlgorithm)]
 [PipelineStage(PipelineStage.Training)]
 public class MappedRandomForestModel<T> : ModelWrapperBase<T, Matrix<T>, Vector<T>>

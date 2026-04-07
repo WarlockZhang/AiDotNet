@@ -52,7 +52,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("LoRAHub: Efficient Cross-Task Generalization via Dynamic LoRA Composition",
+[ResearchPaper("LoRAHub: Efficient Cross-Task Generalization via Dynamic LoRA Composition",
     "https://arxiv.org/abs/2307.13269",
     Year = 2023,
     Authors = "Chengsong Huang, Qian Liu, Bill Yuchen Lin, Tianyu Pang, Chao Du, Min Lin")]

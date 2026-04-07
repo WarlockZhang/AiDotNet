@@ -19,7 +19,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Convolutional Conditional Neural Processes",
+[ResearchPaper("Convolutional Conditional Neural Processes",
     "https://arxiv.org/abs/1910.13556",
     Year = 2020,
     Authors = "Jonathan Gordon, Wessel P. Bruinsma, Andrew Y.K. Foong, et al.")]

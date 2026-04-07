@@ -44,7 +44,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Task-Agnostic Continual Learning with ATAML",
+[ResearchPaper("Task-Agnostic Continual Learning with ATAML",
     "https://arxiv.org/abs/1906.05080",
     Year = 2019,
     Authors = "Shaohua Li, Xiuchao Sui, Xinxing Xu, et al.")]

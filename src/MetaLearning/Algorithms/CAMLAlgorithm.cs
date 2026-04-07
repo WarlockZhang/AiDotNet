@@ -83,7 +83,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Context-Aware Meta-Learning",
+[ResearchPaper("Context-Aware Meta-Learning",
     "https://arxiv.org/abs/2310.10971",
     Year = 2023,
     Authors = "Christopher Fifty, Dennis Duan, Ronald G. Junkins, et al.")]

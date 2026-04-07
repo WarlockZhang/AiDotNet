@@ -73,7 +73,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Rapid Learning or Feature Reuse? Towards Understanding the Effectiveness of MAML",
+[ResearchPaper("Rapid Learning or Feature Reuse? Towards Understanding the Effectiveness of MAML",
     "https://arxiv.org/abs/1909.09157",
     Year = 2020,
     Authors = "Aniruddh Raghu, Maithra Raghu, Samy Bengio, Oriol Vinyals")]

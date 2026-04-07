@@ -46,7 +46,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Learning to Learn and Remember Super Long Multi-Domain Task Sequence",
+[ResearchPaper("Learning to Learn and Remember Super Long Multi-Domain Task Sequence",
     "https://arxiv.org/abs/2012.00220",
     Year = 2020,
     Authors = "Zhenyi Wang, Li Shen, Le Fang, Qiuling Suo, Tiehang Duan, Mingchen Gao")]

@@ -58,7 +58,7 @@ namespace AiDotNet.KnowledgeDistillation.Strategies;
 [ModelTask(ModelTask.Compression)]
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Like What You Like: Knowledge Distill via Neuron Selectivity Transfer",
+[ResearchPaper("Like What You Like: Knowledge Distill via Neuron Selectivity Transfer",
     "https://arxiv.org/abs/1707.01219",
     Year = 2017,
     Authors = "Zehao Huang, Naiyan Wang")]

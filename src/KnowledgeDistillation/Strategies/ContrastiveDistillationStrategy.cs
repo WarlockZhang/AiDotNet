@@ -74,7 +74,7 @@ namespace AiDotNet.KnowledgeDistillation.Strategies;
 [ModelTask(ModelTask.Compression)]
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Contrastive Representation Distillation",
+[ResearchPaper("Contrastive Representation Distillation",
     "https://arxiv.org/abs/1910.10699",
     Year = 2020,
     Authors = "Yonglong Tian, Dilip Krishnan, Phillip Isola")]

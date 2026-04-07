@@ -87,7 +87,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Meta-Learning Probabilistic Inference for Prediction",
+[ResearchPaper("Meta-Learning Probabilistic Inference for Prediction",
     "https://arxiv.org/abs/1805.09921",
     Year = 2019,
     Authors = "Gordon, J., Bronskill, J., Bauer, M., Nowozin, S., & Turner, R. E.")]

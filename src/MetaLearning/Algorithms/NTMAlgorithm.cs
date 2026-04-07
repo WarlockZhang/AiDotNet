@@ -106,7 +106,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Neural Turing Machines",
+[ResearchPaper("Neural Turing Machines",
     "https://arxiv.org/abs/1410.5401",
     Year = 2014,
     Authors = "Alex Graves, Greg Wayne, Ivo Danihelka")]

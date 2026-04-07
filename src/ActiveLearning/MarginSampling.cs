@@ -35,7 +35,7 @@ namespace AiDotNet.ActiveLearning;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.Low)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Active Learning", "https://doi.org/10.1007/978-3-031-01560-1", Year = 2012, Authors = "Burr Settles")]
+[ResearchPaper("Active Learning", "https://doi.org/10.1007/978-3-031-01560-1", Year = 2012, Authors = "Burr Settles")]
 [ComponentType(ComponentType.ActiveLearner)]
 [PipelineStage(PipelineStage.Training)]
 public class MarginSampling<T> : IActiveLearningStrategy<T>

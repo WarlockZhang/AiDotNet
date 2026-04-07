@@ -47,7 +47,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Efficient Off-Policy Meta-Reinforcement Learning via Probabilistic Context Variables",
+[ResearchPaper("Efficient Off-Policy Meta-Reinforcement Learning via Probabilistic Context Variables",
     "https://arxiv.org/abs/1903.08254",
     Year = 2019,
     Authors = "Kate Rakelly, Aurick Zhou, Chelsea Finn, Sergey Levine, Deirdre Quillen")]

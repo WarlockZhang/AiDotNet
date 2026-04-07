@@ -56,7 +56,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Denoising Diffusion Probabilistic Models",
+[ResearchPaper("Denoising Diffusion Probabilistic Models",
     "https://arxiv.org/abs/2006.11239",
     Year = 2020,
     Authors = "Jonathan Ho, Ajay Jain, Pieter Abbeel")]

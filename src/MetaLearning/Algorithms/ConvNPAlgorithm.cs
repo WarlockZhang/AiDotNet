@@ -19,7 +19,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Meta-Learning Stationary Stochastic Process Prediction with Convolutional Neural Processes",
+[ResearchPaper("Meta-Learning Stationary Stochastic Process Prediction with Convolutional Neural Processes",
     "https://arxiv.org/abs/2007.01332",
     Year = 2020,
     Authors = "Andrew Y.K. Foong, Wessel P. Bruinsma, Jonathan Gordon, et al.")]

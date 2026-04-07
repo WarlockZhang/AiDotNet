@@ -51,7 +51,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Bayesian Few-Shot Classification with One-vs-Each Polya-Gamma Augmented Gaussian Processes",
+[ResearchPaper("Bayesian Few-Shot Classification with One-vs-Each Polya-Gamma Augmented Gaussian Processes",
     "https://arxiv.org/abs/2007.10417",
     Year = 2021,
     Authors = "Jake Snell, Richard Zemel")]

@@ -70,7 +70,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Few-Shot Learning with Graph Neural Networks",
+[ResearchPaper("Few-Shot Learning with Graph Neural Networks",
     "https://arxiv.org/abs/1711.04043",
     Year = 2018,
     Authors = "Victor Garcia, Joan Bruna")]

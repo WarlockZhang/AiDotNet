@@ -44,7 +44,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Cross-Domain Few-Shot Classification via Learned Feature-Wise Transformation",
+[ResearchPaper("Cross-Domain Few-Shot Classification via Learned Feature-Wise Transformation",
     "https://arxiv.org/abs/2001.08735",
     Year = 2021,
     Authors = "Jiechao Guan, Zhiwu Lu, Tao Xiang, Ji-Rong Wen")]

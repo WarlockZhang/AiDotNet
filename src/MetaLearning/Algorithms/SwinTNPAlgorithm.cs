@@ -20,7 +20,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Transformer Neural Processes: Uncertainty-Aware Meta Learning Via Sequence Modeling",
+[ResearchPaper("Transformer Neural Processes: Uncertainty-Aware Meta Learning Via Sequence Modeling",
     "https://arxiv.org/abs/2207.04179",
     Year = 2022,
     Authors = "Tung Nguyen, Aditya Grover")]

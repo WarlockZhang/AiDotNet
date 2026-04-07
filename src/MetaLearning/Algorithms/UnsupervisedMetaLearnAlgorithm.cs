@@ -47,7 +47,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Unsupervised Learning via Meta-Learning",
+[ResearchPaper("Unsupervised Learning via Meta-Learning",
     "https://arxiv.org/abs/1810.02334",
     Year = 2019,
     Authors = "Hsu, K., Levine, S., & Finn, C.")]

@@ -48,7 +48,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Overcoming Catastrophic Forgetting with Hard Attention to the Task",
+[ResearchPaper("Overcoming Catastrophic Forgetting with Hard Attention to the Task",
     "https://arxiv.org/abs/1801.01423",
     Year = 2018,
     Authors = "Joan Serra, Didac Suris, Marius Miron, Alexandros Karatzoglou")]

@@ -37,7 +37,7 @@ namespace AiDotNet.MetaLearning.Models;
 [ModelTask(ModelTask.Regression)]
 [ModelComplexity(ModelComplexity.Low)]
 [ModelInput(typeof(Matrix<>), typeof(Vector<>))]
-[ModelPaper("Pattern Recognition and Machine Learning", "https://www.springer.com/gp/book/9780387310732")]
+[ResearchPaper("Pattern Recognition and Machine Learning", "https://www.springer.com/gp/book/9780387310732")]
 [ComponentType(ComponentType.MetaLearner)]
 [PipelineStage(PipelineStage.Training)]
 public class LinearVectorModel : ModelBase<double, Matrix<double>, Vector<double>>, ICloneable

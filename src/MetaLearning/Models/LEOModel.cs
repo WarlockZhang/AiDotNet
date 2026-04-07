@@ -38,7 +38,7 @@ namespace AiDotNet.MetaLearning.Models;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Meta-Learning with Latent Embedding Optimization",
+[ResearchPaper("Meta-Learning with Latent Embedding Optimization",
     "https://arxiv.org/abs/1807.05960",
     Year = 2019,
     Authors = "Rusu, A. A., Rao, D., Sygnowski, J., Vinyals, O., Pascanu, R., Osindero, S., & Hadsell, R.")]

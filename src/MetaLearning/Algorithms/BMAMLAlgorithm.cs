@@ -53,7 +53,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Bayesian Model-Agnostic Meta-Learning",
+[ResearchPaper("Bayesian Model-Agnostic Meta-Learning",
     "https://arxiv.org/abs/1806.03836",
     Year = 2018,
     Authors = "Jaesik Yoon, Taesup Kim, Ousmane Dia, et al.")]

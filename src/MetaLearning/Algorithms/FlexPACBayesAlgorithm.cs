@@ -54,7 +54,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("PAC-Bayes Meta-Learning with Implicit Task-Specific Posteriors",
+[ResearchPaper("PAC-Bayes Meta-Learning with Implicit Task-Specific Posteriors",
     "https://arxiv.org/abs/2003.05529",
     Year = 2020,
     Authors = "Cuong Nguyen, Thanh-Toan Do, Gustavo Carneiro")]

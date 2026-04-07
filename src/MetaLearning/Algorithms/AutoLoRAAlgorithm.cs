@@ -50,7 +50,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("AutoLoRA: Automatically Tuning Matrix Ranks in Low-Rank Adaptation Based on Meta Learning",
+[ResearchPaper("AutoLoRA: Automatically Tuning Matrix Ranks in Low-Rank Adaptation Based on Meta Learning",
     "https://arxiv.org/abs/2403.09113",
     Year = 2024,
     Authors = "Ruiyi Zhang, Rushi Shah, Haiwen Hong, et al.")]

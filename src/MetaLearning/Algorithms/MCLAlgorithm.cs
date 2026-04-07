@@ -86,7 +86,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Supervised Contrastive Learning",
+[ResearchPaper("Supervised Contrastive Learning",
     "https://arxiv.org/abs/2004.11362",
     Year = 2020,
     Authors = "Prannay Khosla, Piotr Teterwak, Chen Wang, Aaron Sarna, Yonglong Tian, et al.")]

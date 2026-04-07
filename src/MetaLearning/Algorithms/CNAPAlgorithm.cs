@@ -73,7 +73,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("Fast and Flexible Multi-Task Classification Using Conditional Neural Adaptive Processes",
+[ResearchPaper("Fast and Flexible Multi-Task Classification Using Conditional Neural Adaptive Processes",
     "https://arxiv.org/abs/1906.07697",
     Year = 2019,
     Authors = "James Requeima, Jonathan Gordon, John Bronskill, et al.")]

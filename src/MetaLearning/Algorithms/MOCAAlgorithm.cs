@@ -48,7 +48,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("MOCA: Self-supervised Representation Learning by Predicting Masked Online Codebook Assignments",
+[ResearchPaper("MOCA: Self-supervised Representation Learning by Predicting Masked Online Codebook Assignments",
     "https://arxiv.org/abs/2307.09361",
     Year = 2023,
     Authors = "Spyros Gidaris, Andrei Bursuc, Oriane Simeoni, Antonin Vobecky, et al.")]

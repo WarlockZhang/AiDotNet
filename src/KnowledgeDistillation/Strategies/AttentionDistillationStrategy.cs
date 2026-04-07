@@ -64,7 +64,7 @@ namespace AiDotNet.KnowledgeDistillation.Strategies;
 [ModelTask(ModelTask.Compression)]
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("DistilBERT, a Distilled Version of BERT: Smaller, Faster, Cheaper and Lighter",
+[ResearchPaper("DistilBERT, a Distilled Version of BERT: Smaller, Faster, Cheaper and Lighter",
     "https://arxiv.org/abs/1910.01108",
     Year = 2019,
     Authors = "Victor Sanh, Lysandre Debut, Julien Chaumond, Thomas Wolf")]

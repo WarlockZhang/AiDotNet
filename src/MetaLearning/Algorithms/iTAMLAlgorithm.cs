@@ -47,7 +47,7 @@ namespace AiDotNet.MetaLearning.Algorithms;
 [ModelTask(ModelTask.Classification)]
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
-[ModelPaper("iTAML: An Incremental Task-Agnostic Meta-learning Approach",
+[ResearchPaper("iTAML: An Incremental Task-Agnostic Meta-learning Approach",
     "https://arxiv.org/abs/2003.11652",
     Year = 2020,
     Authors = "Jathushan Rajasegaran, Salman Khan, Munawar Hayat, et al.")]
