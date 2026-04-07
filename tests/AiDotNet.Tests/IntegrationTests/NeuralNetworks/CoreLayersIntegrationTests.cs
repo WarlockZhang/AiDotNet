@@ -219,104 +219,6 @@ public class CoreLayersIntegrationTests
         Assert.True(loss > 0, "L2 regularization loss should be positive");
     }
 
-    [Fact]
-    public void DenseLayer_TrainingVsInferenceMode_ProduceSameOutputValues_ReLU()
-    {
-        // PR change: training mode uses separate pre-activation path; inference uses fused path.
-        // The numerical output must be identical regardless of which internal path is taken.
-        int inputSize = 16;
-        int outputSize = 8;
-        var layer = new DenseLayer<float>(inputSize, outputSize,
-            (IActivationFunction<float>)new ReLUActivation<float>());
-        var input = Create2DInput(2, inputSize, seed: 7);
-
-        // Act — training mode (default)
-        layer.SetTrainingMode(true);
-        var trainOutput = layer.Forward(input);
-
-        // Act — inference mode
-        layer.SetTrainingMode(false);
-        var inferOutput = layer.Forward(input);
-
-        // Assert — both paths must yield the same values
-        Assert.Equal(trainOutput.Shape.ToArray(), inferOutput.Shape.ToArray());
-        for (int i = 0; i < trainOutput.Length; i++)
-        {
-            Assert.Equal(trainOutput[i], inferOutput[i], Tolerance);
-        }
-    }
-
-    [Fact]
-    public void DenseLayer_TrainingVsInferenceMode_ProduceSameOutputValues_Sigmoid()
-    {
-        // Sigmoid has a known FusedActivationType, so the inference path differs from training.
-        // Both must still yield numerically equivalent results.
-        int inputSize = 12;
-        int outputSize = 6;
-        var layer = new DenseLayer<float>(inputSize, outputSize,
-            (IActivationFunction<float>)new SigmoidActivation<float>());
-        var input = Create2DInput(3, inputSize, seed: 99);
-
-        layer.SetTrainingMode(true);
-        var trainOutput = layer.Forward(input);
-
-        layer.SetTrainingMode(false);
-        var inferOutput = layer.Forward(input);
-
-        Assert.Equal(trainOutput.Shape.ToArray(), inferOutput.Shape.ToArray());
-        for (int i = 0; i < trainOutput.Length; i++)
-        {
-            Assert.Equal(trainOutput[i], inferOutput[i], 1e-4f);
-        }
-    }
-
-    [Fact]
-    public void DenseLayer_InferenceMode_WithIdentityActivation_ProducesCorrectShape()
-    {
-        // Identity activation has no fused type (FusedActivationType.None),
-        // so even in inference mode the else-branch is taken — verifies that path.
-        int inputSize = 8;
-        int outputSize = 4;
-        var layer = new DenseLayer<float>(inputSize, outputSize,
-            (IActivationFunction<float>)new IdentityActivation<float>());
-        var input = Create2DInput(2, inputSize);
-
-        layer.SetTrainingMode(false);
-        var output = layer.Forward(input);
-
-        Assert.Equal(2, output.Rank);
-        Assert.Equal(2, output.Shape[0]);
-        Assert.Equal(outputSize, output.Shape[1]);
-    }
-
-    [Fact]
-    public void DenseLayer_SwitchingTrainingMode_DoesNotCorruptWeights()
-    {
-        // Switching modes between calls must not corrupt the layer's weight state.
-        int inputSize = 8;
-        int outputSize = 4;
-        var layer = new DenseLayer<float>(inputSize, outputSize,
-            (IActivationFunction<float>)new ReLUActivation<float>());
-        var input = Create2DInput(1, inputSize, seed: 11);
-
-        // Forward in training mode
-        layer.SetTrainingMode(true);
-        var out1 = layer.Forward(input);
-
-        // Forward in inference mode
-        layer.SetTrainingMode(false);
-        var out2 = layer.Forward(input);
-
-        // Switch back to training mode — must still produce the same values
-        layer.SetTrainingMode(true);
-        var out3 = layer.Forward(input);
-
-        for (int i = 0; i < out1.Length; i++)
-        {
-            Assert.Equal(out1[i], out3[i], Tolerance);
-        }
-    }
-
     #endregion
 
     #region ConvolutionalLayer Tests
@@ -855,6 +757,127 @@ public class CoreLayersIntegrationTests
         for (int i = 0; i < originalOutput.Length; i++)
         {
             Assert.Equal(originalOutput[i], cloneOutput[i], Tolerance);
+        }
+    }
+
+    #endregion
+
+    #region DenseLayer Training vs Inference Mode Tests (PR change coverage)
+
+    /// <summary>
+    /// After the PR change, DenseLayer.Forward in training mode always uses
+    /// FusedLinear(None) + ApplyActivation separately (even for fused-supported activations).
+    /// In inference mode it uses the fused path.  Both paths must produce identical values.
+    /// </summary>
+    [Fact]
+    public void DenseLayer_TrainingVsInferenceMode_ProduceIdenticalOutputValues()
+    {
+        // Arrange
+        int inputSize = 8;
+        int outputSize = 4;
+        // ReLU is a fused-supported activation — exercises the changed branch
+        var layer = new DenseLayer<float>(inputSize, outputSize, (IActivationFunction<float>)new ReLUActivation<float>());
+        var input = Create2DInput(2, inputSize, seed: 77);
+
+        // Act
+        layer.SetTrainingMode(false);
+        var inferenceOutput = layer.Forward(input);
+
+        layer.SetTrainingMode(true);
+        var trainingOutput = layer.Forward(input);
+
+        // Assert — correctness: both paths compute the same linear + activation
+        Assert.Equal(inferenceOutput.Shape.ToArray(), trainingOutput.Shape.ToArray());
+        for (int i = 0; i < inferenceOutput.Length; i++)
+        {
+            Assert.Equal(inferenceOutput[i], trainingOutput[i], Tolerance);
+        }
+    }
+
+    [Fact]
+    public void DenseLayer_InferenceModeWithFusedActivation_ProducesFiniteOutput()
+    {
+        // Inference mode takes the new fused path — verify output is well-formed
+        var layer = new DenseLayer<float>(16, 8, (IActivationFunction<float>)new ReLUActivation<float>());
+        layer.SetTrainingMode(false);
+        var input = Create2DInput(4, 16, seed: 10);
+
+        var output = layer.Forward(input);
+
+        Assert.Equal(2, output.Rank);
+        Assert.Equal(4, output.Shape[0]);
+        Assert.Equal(8, output.Shape[1]);
+        foreach (var v in output)
+            Assert.False(float.IsNaN(v) || float.IsInfinity(v), "Inference output must be finite.");
+    }
+
+    [Fact]
+    public void DenseLayer_TrainingModeWithFusedActivation_ProducesFiniteOutput()
+    {
+        // Training mode now always goes through else-branch — verify output shape and finiteness
+        var layer = new DenseLayer<float>(16, 8, (IActivationFunction<float>)new ReLUActivation<float>());
+        layer.SetTrainingMode(true);
+        var input = Create2DInput(4, 16, seed: 20);
+
+        var output = layer.Forward(input);
+
+        Assert.Equal(2, output.Rank);
+        Assert.Equal(4, output.Shape[0]);
+        Assert.Equal(8, output.Shape[1]);
+        foreach (var v in output)
+            Assert.False(float.IsNaN(v) || float.IsInfinity(v), "Training output must be finite.");
+    }
+
+    [Fact]
+    public void DenseLayer_TrainingMode_WithIdentityActivation_ProducesSameOutputAsInference()
+    {
+        // IdentityActivation has no fused type, so both training and inference go through else-branch.
+        // The new Activate(Tensor) override returns the same reference — verify consistent results.
+        var layer = new DenseLayer<float>(8, 4, (IActivationFunction<float>)new IdentityActivation<float>());
+        var input = Create2DInput(2, 8, seed: 55);
+
+        layer.SetTrainingMode(false);
+        var inferenceOutput = layer.Forward(input);
+
+        layer.SetTrainingMode(true);
+        var trainingOutput = layer.Forward(input);
+
+        for (int i = 0; i < inferenceOutput.Length; i++)
+            Assert.Equal(inferenceOutput[i], trainingOutput[i], Tolerance);
+    }
+
+    [Fact]
+    public void DenseLayer_ReLUActivation_TrainingMode_OutputsAreNonNegative()
+    {
+        // Regression: after the PR change the else-branch applies ApplyActivation(preActivation).
+        // ReLU should still zero out negatives.
+        var layer = new DenseLayer<float>(8, 4, (IActivationFunction<float>)new ReLUActivation<float>());
+        layer.SetTrainingMode(true);
+
+        // Use a fixed input where some pre-activation outputs will be negative
+        var input = new Tensor<float>(new float[] { -3f, -2f, -1f, 0f, 1f, 2f, 3f, 4f }, [1, 8]);
+        var output = layer.Forward(input);
+
+        foreach (var v in output)
+            Assert.True(v >= 0f, $"ReLU output must be non-negative; got {v}");
+    }
+
+    [Fact]
+    public void DenseLayer_SwitchingModesDuringMultiplePasses_ProducesConsistentResults()
+    {
+        // Stress-test the training/inference switch: alternating modes should never corrupt output.
+        var layer = new DenseLayer<float>(8, 4, (IActivationFunction<float>)new ReLUActivation<float>());
+        var input = Create2DInput(2, 8, seed: 99);
+
+        layer.SetTrainingMode(false);
+        var refOutput = layer.Forward(input);
+
+        for (int pass = 0; pass < 5; pass++)
+        {
+            layer.SetTrainingMode(pass % 2 == 0);
+            var output = layer.Forward(input);
+            for (int i = 0; i < refOutput.Length; i++)
+                Assert.Equal(refOutput[i], output[i], Tolerance);
         }
     }
 

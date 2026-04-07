@@ -127,13 +127,12 @@ public class ParameterBufferScopeTests
     }
 
     [Fact]
-    public void Train_MultipleSteps_ParameterReferencesRemainStableAcrossAllSteps()
+    public void Train_MultipleConsecutiveSteps_AlwaysRestoreOriginalReferences()
     {
-        // Regression: RestoreOriginalParameters must restore refs on EVERY step,
-        // not just the first one.
+        // Regression: each training step must restore original tensor refs so that
+        // references captured before training remain valid across multiple steps.
         var network = CreateSimpleNetwork();
 
-        // Capture references before any training
         var originalParams = new List<Tensor<double>>();
         foreach (var layer in network.Layers)
         {
@@ -145,35 +144,55 @@ public class ParameterBufferScopeTests
         var input = new Tensor<double>([1, 4]);
         input[0, 0] = 1.0; input[0, 1] = 2.0; input[0, 2] = 3.0; input[0, 3] = 4.0;
         var target = new Tensor<double>([1, 2]);
-        target[0, 0] = 5.0; target[0, 1] = -5.0;
+        target[0, 0] = 10.0; target[0, 1] = -10.0;
 
-        // Run multiple training steps and verify references after each
+        // Run several steps and verify references after each one
         for (int step = 0; step < 5; step++)
         {
             network.Train(input, target);
 
-            var afterParams = new List<Tensor<double>>();
+            int idx = 0;
             foreach (var layer in network.Layers)
             {
                 if (layer is ITrainableLayer<double> trainable)
+                {
                     foreach (var p in trainable.GetTrainableParameters())
-                        afterParams.Add(p);
-            }
-
-            Assert.Equal(originalParams.Count, afterParams.Count);
-            for (int i = 0; i < originalParams.Count; i++)
-            {
-                Assert.True(ReferenceEquals(afterParams[i], originalParams[i]),
-                    $"Step {step + 1}: parameter {i} was replaced with a buffer view");
+                    {
+                        Assert.True(ReferenceEquals(p, originalParams[idx]),
+                            $"Step {step}: parameter {idx} was permanently replaced with a buffer view.");
+                        idx++;
+                    }
+                }
             }
         }
     }
 
     [Fact]
-    public void Train_ParameterValuesInOriginalTensorsMatchAfterRestore()
+    public void Train_ThenPredict_ReturnsFiniteOutput()
     {
-        // RestoreOriginalParameters copies data from views back to originals.
-        // Verify that the value in the original tensor equals the trained value.
+        // After training (which now wraps in try/finally), Predict() must still work correctly.
+        var network = CreateSimpleNetwork();
+
+        var input = new Tensor<double>([1, 4]);
+        input[0, 0] = 1.0; input[0, 1] = 0.5; input[0, 2] = -1.0; input[0, 3] = 2.0;
+        var target = new Tensor<double>([1, 2]);
+        target[0, 0] = 5.0; target[0, 1] = -5.0;
+
+        for (int step = 0; step < 3; step++)
+            network.Train(input, target);
+
+        var prediction = network.Predict(new Tensor<double>([4]));
+
+        Assert.NotNull(prediction);
+        for (int i = 0; i < prediction.Length; i++)
+            Assert.False(double.IsNaN(prediction.GetFlat(i)) || double.IsInfinity(prediction.GetFlat(i)),
+                $"Prediction element {i} is not finite after training.");
+    }
+
+    [Fact]
+    public void Train_LastLossIsPopulatedAfterStep()
+    {
+        // TrainWithTape now sets LastLoss inside the try block. Verify it's accessible after Train().
         var network = CreateSimpleNetwork();
 
         var input = new Tensor<double>([1, 4]);
@@ -181,104 +200,84 @@ public class ParameterBufferScopeTests
         var target = new Tensor<double>([1, 2]);
         target[0, 0] = 10.0; target[0, 1] = -10.0;
 
-        // One training step
         network.Train(input, target);
 
-        // Read all parameter values through the original (restored) tensor references
-        var paramValues = new List<double>();
-        foreach (var layer in network.Layers)
-        {
-            if (layer is ITrainableLayer<double> trainable)
-                foreach (var p in trainable.GetTrainableParameters())
-                    for (int i = 0; i < p.Length; i++)
-                        paramValues.Add(p.GetFlat(i));
-        }
-
-        // Run a second step — if values were corrupted, the second forward pass would diverge
-        // (not throw) and we'd see a completely different update trajectory.
-        network.Train(input, target);
-
-        var paramValuesAfterSecond = new List<double>();
-        foreach (var layer in network.Layers)
-        {
-            if (layer is ITrainableLayer<double> trainable)
-                foreach (var p in trainable.GetTrainableParameters())
-                    for (int i = 0; i < p.Length; i++)
-                        paramValuesAfterSecond.Add(p.GetFlat(i));
-        }
-
-        // The values must differ (i.e. second step actually changed the params),
-        // proving the first step's copy-back was correct and used in the next step.
-        bool changed = false;
-        for (int i = 0; i < paramValues.Count; i++)
-        {
-            if (Math.Abs(paramValues[i] - paramValuesAfterSecond[i]) > 1e-12)
-            {
-                changed = true;
-                break;
-            }
-        }
-        Assert.True(changed, "Second training step must update parameters from the correctly restored first-step values");
+        double loss = Convert.ToDouble(network.GetLastLoss());
+        Assert.False(double.IsNaN(loss), "GetLastLoss() must return a valid value after training.");
+        Assert.True(loss >= 0.0, "Loss must be non-negative.");
     }
 
     [Fact]
-    public void Train_ThenPredict_ReturnsFiniteValues()
+    public void Train_LossDecreasesOverExtendedTraining()
     {
-        // After the try/finally restore, the network must still be usable for inference.
+        // End-to-end regression: the try/finally refactor must not break gradient flow.
         var network = CreateSimpleNetwork();
 
         var input = new Tensor<double>([1, 4]);
-        input[0, 0] = 1.0; input[0, 1] = 0.5; input[0, 2] = -0.5; input[0, 3] = 2.0;
+        input[0, 0] = 1.0; input[0, 1] = 2.0; input[0, 2] = 3.0; input[0, 3] = 4.0;
         var target = new Tensor<double>([1, 2]);
-        target[0, 0] = 1.0; target[0, 1] = 0.0;
+        target[0, 0] = 5.0; target[0, 1] = -5.0;
 
-        // Train a few steps
+        // Warm-up to get initial loss
+        network.Train(input, target);
+        double firstLoss = Convert.ToDouble(network.GetLastLoss());
+
+        // Train for many more steps
+        for (int step = 0; step < 50; step++)
+            network.Train(input, target);
+
+        double finalLoss = Convert.ToDouble(network.GetLastLoss());
+
+        Assert.True(finalLoss < firstLoss,
+            $"Loss should decrease over extended training. Initial: {firstLoss}, Final: {finalLoss}");
+    }
+
+    [Fact]
+    public void Train_ParameterValuesAreCopiedBackToOriginalTensors()
+    {
+        // After RestoreOriginalParameters, the original tensor objects must reflect the updated
+        // values that were written into the buffer views during the optimizer step.
+        var network = CreateSimpleNetwork();
+
+        // Snapshot initial values
+        var initialValues = new List<double>();
+        foreach (var layer in network.Layers)
+        {
+            if (layer is ITrainableLayer<double> trainable)
+                foreach (var p in trainable.GetTrainableParameters())
+                    for (int i = 0; i < p.Length; i++)
+                        initialValues.Add(p.GetFlat(i));
+        }
+
+        var input = new Tensor<double>([1, 4]);
+        input[0, 0] = 2.0; input[0, 1] = -3.0; input[0, 2] = 1.0; input[0, 3] = 0.5;
+        var target = new Tensor<double>([1, 2]);
+        target[0, 0] = 100.0; target[0, 1] = -100.0;
+
         for (int step = 0; step < 5; step++)
             network.Train(input, target);
 
-        // Predict using the same input
-        var prediction = network.Predict(input);
-
-        // All outputs must be finite (no NaN / Inf leaking from corrupted views)
-        Assert.NotNull(prediction);
-        for (int i = 0; i < prediction.Length; i++)
-        {
-            Assert.False(double.IsNaN(prediction.GetFlat(i)),
-                $"Prediction element {i} is NaN after training");
-            Assert.False(double.IsInfinity(prediction.GetFlat(i)),
-                $"Prediction element {i} is infinite after training");
-        }
-    }
-
-    [Fact]
-    public void Train_ParameterCountIsConsistentAcrossMultipleSteps()
-    {
-        // RestoreOriginalParameters must never add or remove parameter tensors.
-        var network = CreateSimpleNetwork();
-
-        int expectedCount = 0;
+        // Read values back through the original tensor references
+        var updatedValues = new List<double>();
         foreach (var layer in network.Layers)
         {
             if (layer is ITrainableLayer<double> trainable)
-                expectedCount += trainable.GetTrainableParameters().Count;
+                foreach (var p in trainable.GetTrainableParameters())
+                    for (int i = 0; i < p.Length; i++)
+                        updatedValues.Add(p.GetFlat(i));
         }
 
-        var input = new Tensor<double>([1, 4]);
-        input[0, 0] = 2.0; input[0, 1] = -1.0; input[0, 2] = 0.0; input[0, 3] = 3.0;
-        var target = new Tensor<double>([1, 2]);
-        target[0, 0] = 0.5; target[0, 1] = 0.5;
-
-        for (int step = 0; step < 8; step++)
+        bool anyDiffers = false;
+        for (int i = 0; i < initialValues.Count; i++)
         {
-            network.Train(input, target);
-
-            int count = 0;
-            foreach (var layer in network.Layers)
+            if (Math.Abs(initialValues[i] - updatedValues[i]) > 1e-12)
             {
-                if (layer is ITrainableLayer<double> trainable)
-                    count += trainable.GetTrainableParameters().Count;
+                anyDiffers = true;
+                break;
             }
-            Assert.Equal(expectedCount, count);
         }
+
+        Assert.True(anyDiffers,
+            "Original tensor objects must carry updated values after training — RestoreOriginalParameters must copy data back.");
     }
 }
