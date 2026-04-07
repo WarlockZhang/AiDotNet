@@ -2082,11 +2082,16 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     /// <inheritdoc />
     public virtual Tensor<T> ForwardForTraining(Tensor<T> input)
     {
+        // Debug: verify tape is active during forward pass
+        _forwardTapeActive = GradientTape<T>.Current != null;
+
         var current = input;
         foreach (var layer in Layers)
         {
             current = layer.Forward(current);
         }
+
+        _forwardTapeEntriesAfter = GradientTape<T>.Current?.EntryCount ?? -1;
         return current;
     }
 
@@ -2517,13 +2522,27 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
                 expected = expected.Reshape(output._shape);
             }
 
+            // Debug: tape entries BEFORE gradient computation
+            _lastTapeEntryCount = tape.EntryCount;
+            _forwardTapeActive = GradientTape<T>.Current != null;
+
             var lossTensor = loss.ComputeTapeLoss(output, expected);
+
+            // Debug: tape entries after loss computation
+            _forwardTapeEntriesAfter = tape.EntryCount;
 
             // Compute gradients
             var grads = tape.ComputeGradients(lossTensor, trainableParams);
 
             T lossValue = lossTensor.Length > 0 ? lossTensor[0] : NumOps.Zero;
             LastLoss = lossValue;
+
+            // Debug: track gradient stats for diagnostics
+            _lastGradientCount = grads.Count;
+            _lastParameterCount = trainableParams.Count;
+            _lastTapeWasActive = true;
+            _lastLossLength = lossTensor.Length;
+            _lastLossValue = lossTensor.Length > 0 ? NumOps.ToDouble(lossTensor[0]) : -999;
 
             // Resolve optimizer
             var opt = optimizer ?? GetOrCreateBaseOptimizer();
@@ -2625,6 +2644,17 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     /// Lazily initialized on first training step when trainable parameters are available.
     /// </summary>
     private ParameterBuffer<T>? _parameterBuffer;
+
+    /// <summary>
+    // Debug diagnostics for tape training — accessible via reflection for testing
+    internal int _lastGradientCount;
+    internal int _lastParameterCount;
+    internal int _lastTapeEntryCount;
+    internal bool _lastTapeWasActive;
+    internal int _lastLossLength;
+    internal double _lastLossValue;
+    internal bool _forwardTapeActive;
+    internal int _forwardTapeEntriesAfter;
 
     /// <summary>
     /// Original tensor references saved before buffer view replacement.
