@@ -76,7 +76,10 @@ public class GPUExplainerHelper<T> : IDisposable
     /// </remarks>
     public GPUExplainerHelper(int? maxParallelism = null)
     {
-        _maxParallelism = maxParallelism ?? Environment.ProcessorCount;
+        var resolved = maxParallelism ?? Environment.ProcessorCount;
+        if (resolved <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxParallelism), resolved, "Must be at least 1.");
+        _maxParallelism = resolved;
     }
 
     /// <summary>
