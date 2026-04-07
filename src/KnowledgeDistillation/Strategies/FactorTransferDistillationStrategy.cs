@@ -56,6 +56,8 @@ namespace AiDotNet.KnowledgeDistillation.Strategies;
     "https://arxiv.org/abs/1802.04977",
     Year = 2018,
     Authors = "Jangho Kim, SeongUk Park, Nojun Kwak")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class FactorTransferDistillationStrategy<T> : DistillationStrategyBase<T>
 {
     private readonly double _factorWeight;

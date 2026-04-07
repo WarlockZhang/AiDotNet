@@ -35,6 +35,8 @@ namespace AiDotNet.ActiveLearning;
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("Query by Committee", "https://doi.org/10.1145/130385.130417", Year = 1992, Authors = "H. Sebastian Seung, Manfred Opper, Haim Sompolinsky")]
+[ComponentType(ComponentType.ActiveLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class QueryByCommittee<T> : IActiveLearningStrategy<T>
 {
     private readonly INumericOperations<T> _numOps;

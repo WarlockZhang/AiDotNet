@@ -42,6 +42,8 @@ namespace AiDotNet.ActiveLearning;
 [ModelComplexity(ModelComplexity.Low)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("Elementary Applied Statistics: For Students in Behavioral Science", "https://books.google.com/books?id=0HtMAAAAMAAJ", Year = 1965, Authors = "Linton C. Freeman")]
+[ComponentType(ComponentType.ActiveLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class VariationRatios<T> : IActiveLearningStrategy<T>
 {
     private readonly INumericOperations<T> _numOps;

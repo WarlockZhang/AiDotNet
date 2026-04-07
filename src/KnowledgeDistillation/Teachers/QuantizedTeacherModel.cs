@@ -35,6 +35,8 @@ namespace AiDotNet.KnowledgeDistillation.Teachers;
     "https://arxiv.org/abs/1503.02531",
     Year = 2015,
     Authors = "Geoffrey Hinton, Oriol Vinyals, Jeff Dean")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class QuantizedTeacherModel<T> : TeacherModelBase<Vector<T>, Vector<T>, T>
 {
     private readonly ITeacherModel<Vector<T>, Vector<T>>? _baseTeacher;

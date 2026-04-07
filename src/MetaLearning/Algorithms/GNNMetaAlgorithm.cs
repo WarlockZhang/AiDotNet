@@ -74,6 +74,8 @@ namespace AiDotNet.MetaLearning.Algorithms;
     "https://arxiv.org/abs/1711.04043",
     Year = 2018,
     Authors = "Victor Garcia, Joan Bruna")]
+[ComponentType(ComponentType.MetaLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class GNNMetaAlgorithm<T, TInput, TOutput> : MetaLearnerBase<T, TInput, TOutput>
 {
     private readonly GNNMetaOptions<T, TInput, TOutput> _gnnOptions;

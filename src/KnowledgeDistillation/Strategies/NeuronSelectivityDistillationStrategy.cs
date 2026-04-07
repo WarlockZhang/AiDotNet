@@ -62,6 +62,8 @@ namespace AiDotNet.KnowledgeDistillation.Strategies;
     "https://arxiv.org/abs/1707.01219",
     Year = 2017,
     Authors = "Zehao Huang, Naiyan Wang")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class NeuronSelectivityDistillationStrategy<T> : DistillationStrategyBase<T>, IIntermediateActivationStrategy<T>
 {
     private readonly double _selectivityWeight;

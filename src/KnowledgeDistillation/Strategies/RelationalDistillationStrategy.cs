@@ -85,6 +85,8 @@ namespace AiDotNet.KnowledgeDistillation.Strategies;
     "https://arxiv.org/abs/1904.05068",
     Year = 2019,
     Authors = "Wonpyo Park, Dongju Kim, Yan Lu, Minsu Cho")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class RelationalDistillationStrategy<T> : DistillationStrategyBase<T>
 {
     private readonly double _distanceWeight;

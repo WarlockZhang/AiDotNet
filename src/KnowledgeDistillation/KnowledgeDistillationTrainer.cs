@@ -47,6 +47,8 @@ namespace AiDotNet.KnowledgeDistillation;
     "https://arxiv.org/abs/1503.02531",
     Year = 2015,
     Authors = "Geoffrey Hinton, Oriol Vinyals, Jeff Dean")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class KnowledgeDistillationTrainer<T> : KnowledgeDistillationTrainerBase<T, Vector<T>, Vector<T>>
 {
     /// <summary>

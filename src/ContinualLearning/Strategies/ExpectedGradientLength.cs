@@ -90,6 +90,8 @@ public class EGLOptions<T>
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("An Analysis of Active Learning Strategies for Sequence Labeling Tasks", "https://aclanthology.org/D08-1112/", Year = 2008, Authors = "Burr Settles, Mark Craven")]
+[ComponentType(ComponentType.ContinualLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class ExpectedGradientLength<T, TInput, TOutput> : ContinualLearningStrategyBase<T, TInput, TOutput>
 {
     private readonly T _lambda;

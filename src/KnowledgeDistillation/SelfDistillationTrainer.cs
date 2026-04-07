@@ -61,6 +61,8 @@ namespace AiDotNet.KnowledgeDistillation;
     "https://arxiv.org/abs/1805.04770",
     Year = 2018,
     Authors = "Tommaso Furlanello, Zachary C. Lipton, Michael Tschannen, et al.")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class SelfDistillationTrainer<T> : KnowledgeDistillationTrainerBase<T, Vector<T>, Vector<T>>
 {
     private readonly int _generations;

@@ -40,6 +40,8 @@ namespace AiDotNet.ActiveLearning.StoppingCriteria;
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("Predicting Sample Size Required for Classification Performance", "https://doi.org/10.1186/1471-2288-12-8", Year = 2012, Authors = "Rosa L. Figueroa, Qing Zeng-Treitler, Sasikiran Kandula, Long H. Ngo")]
+[ComponentType(ComponentType.ActiveLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class ConvergenceCriterion<T> : IStoppingCriterion<T>
 {
     private static readonly INumericOperations<T> NumOps = MathHelper.GetNumericOperations<T>();

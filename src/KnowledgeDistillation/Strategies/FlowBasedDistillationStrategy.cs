@@ -22,6 +22,8 @@ namespace AiDotNet.KnowledgeDistillation.Strategies;
     "https://arxiv.org/abs/1710.01878",
     Year = 2017,
     Authors = "Junho Yim, Donggyu Joo, Jihoon Bae, Junmo Kim")]
+[ComponentType(ComponentType.DistillationStrategy)]
+[PipelineStage(PipelineStage.Training)]
 public class FlowBasedDistillationStrategy<T> : DistillationStrategyBase<T>
 {
     private readonly double _flowWeight;
