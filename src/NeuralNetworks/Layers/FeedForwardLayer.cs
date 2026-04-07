@@ -27,8 +27,8 @@ namespace AiDotNet.NeuralNetworks.Layers;
 /// 
 /// For example:
 /// - Input: [0.2, 0.5, 0.1] (representing features from previous layer)
-/// - _weights: [[0.1, 0.8], [0.4, 0.3], [0.7, 0.2]] (each input's influence on each output)
-/// - _biases: [0.1, -0.2] (starting values for each output)
+/// - Weights: [[0.1, 0.8], [0.4, 0.3], [0.7, 0.2]] (each input's influence on each output)
+/// - Biases: [0.1, -0.2] (starting values for each output)
 /// - Output before activation: [0.2×0.1 + 0.5×0.4 + 0.1×0.7 + 0.1, 0.2×0.8 + 0.5×0.3 + 0.1×0.2 - 0.2]
 ///                           = [0.39, 0.33]
 /// - After activation (e.g., ReLU): [0.39, 0.33] (since both are already positive)
@@ -82,9 +82,9 @@ public partial class FeedForwardLayer<T> : LayerBase<T>
     /// This tensor stores the learnable bias terms for each output neuron. The shape is [1, outputSize].
     /// The bias is added to the weighted sum of inputs before applying the activation function.
     /// </para>
-    /// <para><b>For Beginners:</b> _biases are like default or starting values for each output.
+    /// <para><b>For Beginners:</b> Biases are like default or starting values for each output.
     /// 
-    /// _biases serve several important purposes:
+    /// Biases serve several important purposes:
     /// - They allow outputs to be activated even when all inputs are zero
     /// - They act like an adjustable threshold for each neuron
     /// - They give the network more flexibility in learning
