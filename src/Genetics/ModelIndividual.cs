@@ -404,32 +404,5 @@ public class ModelIndividual<T, TInput, TOutput, TGene> :
     }
 
 
-    #region IJitCompilable Implementation
-
-    /// <summary>
-    /// Gets whether this model currently supports JIT compilation.
-    /// </summary>
-    /// <value>True if the inner model supports JIT compilation, false otherwise.</value>
-    /// <remarks>
-    /// <para>
-    /// Model individuals delegate JIT compilation support to their inner model.
-    /// Genetic evolution does not affect JIT compilability - it depends on the wrapped model type.
-    /// </para>
-    /// <para><b>For Beginners:</b> Genetically evolved models can be JIT compiled if their inner model supports it.
-    ///
-    /// The genetic algorithm modifies the model's genes (parameters/structure), but:
-    /// - The underlying computation graph can still be JIT compiled
-    /// - Evolution happens at the model level, JIT compilation at the execution level
-    /// - Both work together: evolution finds good parameters, JIT makes them run fast
-    /// </para>
-    /// </remarks>
-    public virtual bool SupportsJitCompilation => false;
-
-    public virtual ComputationNode<T> ExportComputationGraph(List<ComputationNode<T>> inputNodes)
-    {
-        throw new NotSupportedException("JIT compilation has been removed.");
-    }
-
-    #endregion
     #endregion
 }

@@ -49,24 +49,16 @@ public class GPUExplainerHelper<T> : IDisposable
 
     /// <summary>
     /// Gets whether GPU acceleration is available and enabled.
+    /// Always returns false — per-layer GPU support was removed with the JIT compiler.
+    /// GPU acceleration is now handled at the Tensors engine level.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>For Beginners:</b> This property tells you if the helper is using a GPU.
-    /// If false, all operations fall back to CPU (which still uses parallel processing).
-    /// </para>
-    /// </remarks>
     public bool IsGPUEnabled => false;
 
     /// <summary>
-    /// Gets information about the GPU device, if available.
+    /// Gets information about the GPU device.
+    /// Always returns null — per-layer GPU support was removed with the JIT compiler.
+    /// GPU device management is now handled at the Tensors engine level.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>For Beginners:</b> Contains details like GPU name, memory, and compute capability.
-    /// Useful for understanding performance characteristics.
-    /// </para>
-    /// </remarks>
     public object? DeviceInfo => null;
 
     /// <summary>
@@ -75,16 +67,12 @@ public class GPUExplainerHelper<T> : IDisposable
     public int MaxParallelism => _maxParallelism;
 
     /// <summary>
-    /// Initializes a new GPU explainer helper.
+    /// Initializes a new GPU explainer helper using CPU parallel processing.
     /// </summary>
-    /// <param name="gpuRuntime">The GPU runtime to use. If null, CPU fallback is used.</param>
     /// <param name="maxParallelism">Maximum parallelism for CPU operations (default: processor count).</param>
     /// <remarks>
-    /// <para>
-    /// <b>For Beginners:</b> Create this helper with a GPU runtime for maximum performance.
-    /// If you don't have a GPU or want to use CPU, pass null - the helper will still
-    /// use parallel processing on CPU cores.
-    /// </para>
+    /// Per-layer GPU support was removed with the JIT compiler. GPU acceleration
+    /// is now handled at the Tensors engine level. This helper uses CPU parallelism.
     /// </remarks>
     public GPUExplainerHelper(int? maxParallelism = null)
     {

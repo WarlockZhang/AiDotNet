@@ -230,28 +230,6 @@ namespace AiDotNet.Autodiff
             return network.Layers.Count > 0;
         }
 
-        private static ComputationNode<T> BuildGraph(
-            NeuralNetworkBase<T> network,
-            ComputationNode<T> inputNode)
-        {
-            var current = inputNode;
-            foreach (var layer in network.Layers)
-            {
-                if (layer is NeuralNetworks.Layers.LayerBase<T> layerBase)
-                {
-                    var inputs = new System.Collections.Generic.List<ComputationNode<T>> { current };
-                    current = layerBase.ExportComputationGraph(inputs);
-                }
-                else
-                {
-                    throw new NotSupportedException(
-                        $"Layer {layer.GetType().Name} does not support computation graph export.");
-                }
-            }
-
-            return current;
-        }
-
         /// <summary>
         /// Threshold above which SPSA is used instead of per-dimension finite differences.
         /// For PINN with 2-4 spatial dims, exact finite differences is fast (8-24 passes).
