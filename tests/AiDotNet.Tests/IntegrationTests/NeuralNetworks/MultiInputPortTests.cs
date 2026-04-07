@@ -266,10 +266,11 @@ public class MultiInputPortTests
         Assert.Equal(4, output.Shape[^1]);
     }
 
-    [Fact(Skip = "ConcatenateLayer constructor has pre-existing shape validation bug — tracked separately")]
+    [Fact]
     public void ConcatenateLayer_InputPorts_DeclaresMultipleInputs()
     {
-        var layer = new ConcatenateLayer<double>(new[] { new[] { 2, 4 }, new[] { 2, 4 } }, axis: 1, activationFunction: (IActivationFunction<double>?)null);
+        // axis=0 concat: two [4]-shaped inputs → [8] output
+        var layer = new ConcatenateLayer<double>(new[] { new[] { 4 }, new[] { 4 } }, axis: 0, activationFunction: (IActivationFunction<double>?)null);
 
         Assert.Equal(2, layer.InputPorts.Count);
         Assert.Equal("input_0", layer.InputPorts[0].Name);

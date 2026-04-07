@@ -272,16 +272,19 @@ public class AddLayer<T> : LayerBase<T>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
         if (inputs == null) throw new ArgumentNullException(nameof(inputs));
-        var ordered = new List<(int index, Tensor<T> tensor)>();
-        foreach (var kvp in inputs)
+        // Collect sequential input_0, input_1, ... — require contiguous keys starting at 0
+        var tensors = new List<Tensor<T>>();
+        for (int i = 0; ; i++)
         {
-            if (kvp.Key.StartsWith("input_") && int.TryParse(kvp.Key.AsSpan(6), out int idx))
-                ordered.Add((idx, kvp.Value));
+            if (!inputs.TryGetValue($"input_{i}", out var tensor))
+                break;
+            if (tensor == null)
+                throw new ArgumentException($"AddLayer input 'input_{i}' must not be null.", nameof(inputs));
+            tensors.Add(tensor);
         }
-        ordered.Sort((a, b) => a.index.CompareTo(b.index));
-        if (ordered.Count < 2)
-            throw new ArgumentException("AddLayer requires at least 'input_0' and 'input_1'.", nameof(inputs));
-        return Forward(ordered.Select(x => x.tensor).ToArray());
+        if (tensors.Count < 2)
+            throw new ArgumentException($"AddLayer requires at least 'input_0' and 'input_1'. Got {tensors.Count} sequential inputs.", nameof(inputs));
+        return Forward(tensors.ToArray());
     }
 
     /// <summary>
