@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS0649, CS0414, CS0169
+#pragma warning disable CS0649, CS0414, CS0169
 using AiDotNet.Autodiff;
 using AiDotNet.Interfaces;
 using AiDotNet.Interpretability;
@@ -2082,16 +2082,11 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     /// <inheritdoc />
     public virtual Tensor<T> ForwardForTraining(Tensor<T> input)
     {
-        // Debug: verify tape is active during forward pass
-        _forwardTapeActive = GradientTape<T>.Current != null;
-
         var current = input;
         foreach (var layer in Layers)
         {
             current = layer.Forward(current);
         }
-
-        _forwardTapeEntriesAfter = GradientTape<T>.Current?.EntryCount ?? -1;
         return current;
     }
 
@@ -2493,20 +2488,18 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     protected void TrainWithTape(Tensor<T> input, Tensor<T> expected,
         IGradientBasedOptimizer<T, Tensor<T>, Tensor<T>>? optimizer = null)
     {
-        var engine = AiDotNetEngine.Current;
-
-        // Initialize parameter buffer BEFORE collecting params and running the forward pass.
+        // Initialize parameter buffer — replaces layer tensors with buffer-backed views.
+        // try/finally MUST cover this so views are restored even if setup throws.
         var initialParams = Training.TapeTrainingStep<T>.CollectParameters(Layers, _parameterBuffer is null ? -1 : _layerStructureVersion);
         var paramBuffer = GetOrCreateParameterBuffer(initialParams);
 
-        // Re-collect after buffer initialization — parameter tensor references may have changed
-        var trainableParams = Training.TapeTrainingStep<T>.CollectParameters(Layers, _layerStructureVersion);
-
-        var loss = LossFunction as LossFunctions.LossFunctionBase<T>
-            ?? throw new InvalidOperationException("LossFunction must derive from LossFunctionBase<T> for tape-based training.");
-
         try
         {
+            // Re-collect after buffer initialization — references are now views
+            var trainableParams = Training.TapeTrainingStep<T>.CollectParameters(Layers, _layerStructureVersion);
+
+            var loss = LossFunction as LossFunctions.LossFunctionBase<T>
+                ?? throw new InvalidOperationException("LossFunction must derive from LossFunctionBase<T> for tape-based training.");
             // Forward + loss under tape — uses the buffer-backed view tensors
             using var tape = new GradientTape<T>();
             var output = ForwardForTraining(input);
@@ -2522,39 +2515,12 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
                 expected = expected.Reshape(output._shape);
             }
 
-            // Debug: tape entries BEFORE gradient computation
-            _lastTapeEntryCount = tape.EntryCount;
-            _forwardTapeActive = GradientTape<T>.Current != null;
-
             var lossTensor = loss.ComputeTapeLoss(output, expected);
 
-            // Debug: tape entries after loss computation
-            _forwardTapeEntriesAfter = tape.EntryCount;
-
-            // Debug: verify trainableParams match what layers currently have
-            _lastParamViewMatch = true;
-            foreach (var layer in Layers)
-            {
-                if (layer is ITrainableLayer<T> tl)
-                {
-                    var current = tl.GetTrainableParameters();
-                    for (int p = 0; p < current.Count; p++)
-                    {
-                        bool found = false;
-                        foreach (var tp in trainableParams)
-                        {
-                            if (ReferenceEquals(tp, current[p])) { found = true; break; }
-                        }
-                        if (!found) { _lastParamViewMatch = false; break; }
-                    }
-                }
-            }
-
-            // Compute gradients — pass null sources to get ALL gradients (debug)
+            // Compute all gradients then filter to trainable params.
+            // Passing sources directly can miss parameters when the tape backward
+            // can't match view tensor references through the GradFn chain.
             var allGrads = tape.ComputeGradients(lossTensor, sources: null);
-            _lastAllGradsCount = allGrads.Count;
-
-            // Filter to just trainable params
             var grads = new Dictionary<Tensor<T>, Tensor<T>>(
                 Helpers.TensorReferenceComparer<Tensor<T>>.Instance);
             foreach (var param in trainableParams)
@@ -2566,34 +2532,18 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             T lossValue = lossTensor.Length > 0 ? lossTensor[0] : NumOps.Zero;
             LastLoss = lossValue;
 
-            // Debug: track gradient stats for diagnostics
-            _lastGradientCount = grads.Count;
-            _lastParameterCount = trainableParams.Count;
-
-            // Debug: check if any gradient was non-zero
-            _lastNonZeroGradCount = 0;
-            foreach (var (param, grad) in grads)
-            {
-                for (int g = 0; g < grad.Length; g++)
-                {
-                    if (NumOps.ToDouble(grad.GetFlat(g)) != 0.0)
-                    {
-                        _lastNonZeroGradCount++;
-                        break;
-                    }
-                }
-            }
-            // Check if loss has GradFn
-            _lastLossHasGradFn = lossTensor.GradFn != null;
-            _lastTapeWasActive = true;
-            _lastLossLength = lossTensor.Length;
-            _lastLossValue = lossTensor.Length > 0 ? NumOps.ToDouble(lossTensor[0]) : -999;
 
             // Resolve optimizer
             var opt = optimizer ?? GetOrCreateBaseOptimizer();
 
-            // Build context with re-evaluation support and zero-copy buffer
-            Tensor<T> ComputeForward(Tensor<T> inp, Tensor<T> _) => ForwardForTraining(inp);
+            // Re-evaluation callback applies same shape alignment as initial forward
+            Tensor<T> ComputeForward(Tensor<T> inp, Tensor<T> tgt)
+            {
+                var fwd = ForwardForTraining(inp);
+                if (fwd.Rank > tgt.Rank && fwd.Shape[0] == 1 && fwd.Length == tgt.Length)
+                    fwd = fwd.Reshape(tgt._shape);
+                return fwd;
+            }
 
             var context = new TapeStepContext<T>(
                 trainableParams, grads, lossValue,
@@ -2691,20 +2641,6 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     private ParameterBuffer<T>? _parameterBuffer;
 
     /// <summary>
-    // Debug diagnostics for tape training — accessible via reflection for testing
-    internal int _lastGradientCount;
-    internal int _lastParameterCount;
-    internal int _lastTapeEntryCount;
-    internal bool _lastTapeWasActive;
-    internal int _lastLossLength;
-    internal double _lastLossValue;
-    internal bool _forwardTapeActive;
-    internal int _forwardTapeEntriesAfter;
-    internal int _lastNonZeroGradCount;
-    internal bool _lastLossHasGradFn;
-    internal bool _lastParamViewMatch;
-    internal int _lastAllGradsCount;
-
     /// <summary>
     /// Original tensor references saved before buffer view replacement.
     /// Restored after each training step so Clone/serialization see real tensors.
@@ -2838,22 +2774,30 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             if (layer is ITrainableLayer<T> trainable)
             {
                 var currentViews = trainable.GetTrainableParameters();
-                for (int i = 0; i < Math.Min(originals.Count, currentViews.Count); i++)
+                if (currentViews.Count != originals.Count)
+                    throw new InvalidOperationException(
+                        $"Parameter count changed during training step: expected {originals.Count}, got {currentViews.Count}.");
+
+                for (int i = 0; i < originals.Count; i++)
                 {
-                    // Copy updated weights from view back to original tensor
                     var view = currentViews[i];
                     var orig = originals[i];
-                    for (int j = 0; j < Math.Min(view.Length, orig.Length); j++)
+                    if (view.Length != orig.Length)
+                        throw new InvalidOperationException(
+                            $"Parameter {i} size changed: expected {orig.Length}, got {view.Length}.");
+                    for (int j = 0; j < view.Length; j++)
                         orig.SetFlat(j, view.GetFlat(j));
                 }
 
-                // Restore original tensor references
                 trainable.SetTrainableParameters(originals);
             }
         }
 
         _savedOriginalParameters = null;
+        // Clear buffer so next training step creates fresh views
         _parameterBuffer = null;
+        // Invalidate the tape parameter cache so next CollectParameters re-walks
+        _layerStructureVersion++;
     }
 
     /// <summary>
