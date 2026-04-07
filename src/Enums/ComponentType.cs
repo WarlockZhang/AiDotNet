@@ -109,6 +109,66 @@ public enum ComponentType
     FederatedAggregator,
 
     /// <summary>
+    /// Federated learning trainers that coordinate distributed training.
+    /// Examples: InMemoryFederatedTrainer, BufferedAsyncFederatedTrainer.
+    /// </summary>
+    FederatedTrainer,
+
+    /// <summary>
+    /// Privacy mechanisms for differential privacy and secure computation.
+    /// Examples: GaussianDifferentialPrivacy, RdpPrivacyAccountant, SecureAggregation.
+    /// </summary>
+    PrivacyMechanism,
+
+    /// <summary>
+    /// Private set intersection protocols for secure data matching.
+    /// Examples: CircuitBasedPsi, ObliviousTransferPsi, FuzzyPsi.
+    /// </summary>
+    PSIProtocol,
+
+    /// <summary>
+    /// Personalization strategies for per-client model adaptation.
+    /// Examples: FedCPPersonalization, PFedGatePersonalization, KNNPersonalization.
+    /// </summary>
+    PersonalizationStrategy,
+
+    /// <summary>
+    /// Federated unlearning strategies for selective data removal.
+    /// Examples: DiffusiveNoiseUnlearner, GradientAscentUnlearner.
+    /// </summary>
+    FederatedUnlearner,
+
+    /// <summary>
+    /// Data loading and dataset management components.
+    /// Examples: InMemoryDataset, StreamingDataLoader, LeafDatasetLoader.
+    /// </summary>
+    DataLoader,
+
+    /// <summary>
+    /// Verification and commitment schemes for secure protocols.
+    /// Examples: HashCommitmentScheme, MerkleTreeVerifier.
+    /// </summary>
+    VerificationScheme,
+
+    /// <summary>
+    /// Cryptographic primitives used by secure computation protocols.
+    /// Examples: HmacSha256Prg, AES-CTR, SecretSharing.
+    /// </summary>
+    CryptoPrimitive,
+
+    /// <summary>
+    /// Graph partitioning and topology management components.
+    /// Examples: FederatedGraphPartitioner, CrossClientEdgeDiscovery.
+    /// </summary>
+    GraphPartitioner,
+
+    /// <summary>
+    /// Benchmark and evaluation utilities.
+    /// Examples: VerticalFederatedBenchmark, FederatedEvaluator.
+    /// </summary>
+    BenchmarkUtility,
+
+    /// <summary>
     /// Transfer learning algorithms for domain adaptation.
     /// Examples: FineTuning, FeatureExtraction, AdversarialDA.
     /// </summary>
