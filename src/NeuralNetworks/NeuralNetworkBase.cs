@@ -2500,42 +2500,51 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
         var loss = LossFunction as LossFunctions.LossFunctionBase<T>
             ?? throw new InvalidOperationException("LossFunction must derive from LossFunctionBase<T> for tape-based training.");
 
-        // Forward + loss under tape — uses the buffer-backed view tensors
-        using var tape = new GradientTape<T>();
-        var output = ForwardForTraining(input);
-
-        // Align output shape to target: squeeze leading batch dim when batch=1
-        // (ForwardForTraining may add a batch dim that the target doesn't have)
-        if (output.Rank > expected.Rank && output.Shape[0] == 1 && output.Length == expected.Length)
+        try
         {
-            output = output.Reshape(expected._shape);
+            // Forward + loss under tape — uses the buffer-backed view tensors
+            using var tape = new GradientTape<T>();
+            var output = ForwardForTraining(input);
+
+            // Align output shape to target: squeeze leading batch dim when batch=1
+            // (ForwardForTraining may add a batch dim that the target doesn't have)
+            if (output.Rank > expected.Rank && output.Shape[0] == 1 && output.Length == expected.Length)
+            {
+                output = output.Reshape(expected._shape);
+            }
+            else if (expected.Rank > output.Rank && expected.Shape[0] == 1 && expected.Length == output.Length)
+            {
+                expected = expected.Reshape(output._shape);
+            }
+
+            var lossTensor = loss.ComputeTapeLoss(output, expected);
+
+            // Compute gradients
+            var grads = tape.ComputeGradients(lossTensor, trainableParams);
+
+            T lossValue = lossTensor.Length > 0 ? lossTensor[0] : NumOps.Zero;
+            LastLoss = lossValue;
+
+            // Resolve optimizer
+            var opt = optimizer ?? GetOrCreateBaseOptimizer();
+
+            // Build context with re-evaluation support and zero-copy buffer
+            Tensor<T> ComputeForward(Tensor<T> inp, Tensor<T> _) => ForwardForTraining(inp);
+
+            var context = new TapeStepContext<T>(
+                trainableParams, grads, lossValue,
+                input, expected, ComputeForward,
+                (pred, tgt) => loss.ComputeTapeLoss(pred, tgt),
+                paramBuffer);
+
+            opt.Step(context);
         }
-        else if (expected.Rank > output.Rank && expected.Shape[0] == 1 && expected.Length == output.Length)
+        finally
         {
-            expected = expected.Reshape(output._shape);
+            // Restore original tensor references so Clone/serialization see real tensors.
+            // Copies updated weights from buffer views back to originals before restoring.
+            RestoreOriginalParameters();
         }
-
-        var lossTensor = loss.ComputeTapeLoss(output, expected);
-
-        // Compute gradients
-        var grads = tape.ComputeGradients(lossTensor, trainableParams);
-
-        T lossValue = lossTensor.Length > 0 ? lossTensor[0] : NumOps.Zero;
-        LastLoss = lossValue;
-
-        // Resolve optimizer
-        var opt = optimizer ?? GetOrCreateBaseOptimizer();
-
-        // Build context with re-evaluation support and zero-copy buffer
-        Tensor<T> ComputeForward(Tensor<T> inp, Tensor<T> _) => ForwardForTraining(inp);
-
-        var context = new TapeStepContext<T>(
-            trainableParams, grads, lossValue,
-            input, expected, ComputeForward,
-            (pred, tgt) => loss.ComputeTapeLoss(pred, tgt),
-            paramBuffer);
-
-        opt.Step(context);
     }
 
     /// <summary>
@@ -2618,6 +2627,12 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     private ParameterBuffer<T>? _parameterBuffer;
 
     /// <summary>
+    /// Original tensor references saved before buffer view replacement.
+    /// Restored after each training step so Clone/serialization see real tensors.
+    /// </summary>
+    private Dictionary<ILayer<T>, IReadOnlyList<Tensor<T>>>? _savedOriginalParameters;
+
+    /// <summary>
     /// Gets or lazily creates the contiguous parameter buffer from the current trainable parameters.
     /// </summary>
     private ParameterBuffer<T>? GetOrCreateParameterBuffer(IReadOnlyList<Tensor<T>> trainableParams)
@@ -2649,6 +2664,10 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             Helpers.TensorReferenceComparer<Tensor<T>>.Instance);
         for (int i = 0; i < trainableParams.Count; i++)
             paramToView[trainableParams[i]] = views[i];
+
+        // Save original tensor references before replacement so we can restore later
+        _savedOriginalParameters = new Dictionary<ILayer<T>, IReadOnlyList<Tensor<T>>>();
+        SaveOriginalParameters(Layers, _savedOriginalParameters, new HashSet<ILayer<T>>());
 
         // Replace each layer's parameters with their buffer-backed views.
         var seenLayers = new HashSet<ILayer<T>>();
@@ -2697,6 +2716,62 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             if (subLayers.Count > 0)
                 ReplaceParametersFromMap(subLayers, paramToView, seenLayers);
         }
+    }
+
+    /// <summary>
+    /// Saves original tensor references from all trainable layers before buffer view replacement.
+    /// </summary>
+    private static void SaveOriginalParameters(
+        IEnumerable<ILayer<T>> layers,
+        Dictionary<ILayer<T>, IReadOnlyList<Tensor<T>>> saved,
+        HashSet<ILayer<T>> seen)
+    {
+        foreach (var layer in layers)
+        {
+            if (!seen.Add(layer)) continue;
+
+            if (layer is ITrainableLayer<T> trainable)
+            {
+                var current = trainable.GetTrainableParameters();
+                // Clone the list so we have the original references, not the views
+                saved[layer] = current.ToArray();
+            }
+
+            var subLayers = layer.GetSubLayers();
+            if (subLayers.Count > 0)
+                SaveOriginalParameters(subLayers, saved, seen);
+        }
+    }
+
+    /// <summary>
+    /// Restores original tensor references on all layers after a training step.
+    /// Copies updated data from buffer views back to the original tensors first.
+    /// </summary>
+    private void RestoreOriginalParameters()
+    {
+        if (_savedOriginalParameters == null)
+            return;
+
+        // For each layer, copy updated data from the current (view) tensors
+        // back to the saved original tensors, then restore the originals.
+        foreach (var (layer, originals) in _savedOriginalParameters)
+        {
+            if (layer is ITrainableLayer<T> trainable)
+            {
+                var currentViews = trainable.GetTrainableParameters();
+                for (int i = 0; i < Math.Min(originals.Count, currentViews.Count); i++)
+                {
+                    // Copy updated weights from view back to original tensor
+                    currentViews[i].AsSpan().CopyTo(originals[i].AsWritableSpan());
+                }
+
+                // Restore original tensor references
+                trainable.SetTrainableParameters(originals);
+            }
+        }
+
+        _savedOriginalParameters = null;
+        _parameterBuffer = null;
     }
 
     /// <summary>
