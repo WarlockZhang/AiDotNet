@@ -60,25 +60,43 @@ public partial class RealGatedLinearRecurrenceLayer<T> : LayerBase<T>
     private readonly int _recurrenceDimension;
 
     // Input projection: [modelDim, recurrenceDim]
+    [TrainableParameter(Role = PersistentTensorRole.Weights)]
+
     private Tensor<T> _inputProjectionWeights;
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
+
     private Tensor<T> _inputProjectionBias;
 
     // Recurrence gate: [recurrenceDim, recurrenceDim]
+    [TrainableParameter(Role = PersistentTensorRole.Weights)]
+
     private Tensor<T> _recurrenceGateWeights;
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
+
     private Tensor<T> _recurrenceGateBias;
 
     // Input gate: [recurrenceDim, recurrenceDim]
+    [TrainableParameter(Role = PersistentTensorRole.Weights)]
+
     private Tensor<T> _inputGateWeights;
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
+
     private Tensor<T> _inputGateBias;
 
     // Value projection: [recurrenceDim, recurrenceDim]
+    [TrainableParameter(Role = PersistentTensorRole.Weights)]
+
     private Tensor<T> _valueProjectionWeights;
 
     // Learned decay parameter: [recurrenceDim] (passed through softplus for positivity)
     private Tensor<T> _decayParam;
 
     // Output projection: [recurrenceDim, modelDim]
+    [TrainableParameter(Role = PersistentTensorRole.Weights)]
+
     private Tensor<T> _outputProjectionWeights;
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
+
     private Tensor<T> _outputProjectionBias;
 
     // Cached values

@@ -71,6 +71,7 @@ public partial class FeedForwardLayer<T> : LayerBase<T>
     /// to features like "contains an edge" or "contains a curved line."
     /// </para>
     /// </remarks>
+    [field: TrainableParameter(Role = PersistentTensorRole.Weights)]
     private Tensor<T> Weights { get; set; }
 
     /// <summary>
@@ -97,6 +98,7 @@ public partial class FeedForwardLayer<T> : LayerBase<T>
     /// which would limit what the network can learn.
     /// </para>
     /// </remarks>
+    [field: TrainableParameter(Role = PersistentTensorRole.Biases)]
     private Tensor<T> Biases { get; set; }
 
     /// <summary>

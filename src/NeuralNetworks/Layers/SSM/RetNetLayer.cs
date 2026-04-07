@@ -85,11 +85,23 @@ public partial class RetNetLayer<T> : LayerBase<T>
     private readonly int _headDimension;
 
     // Q, K, V projections: [modelDim, modelDim]
+    [TrainableParameter(Role = PersistentTensorRole.Weights)]
+
     private Tensor<T> _queryWeights;
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
+
     private Tensor<T> _queryBias;
+    [TrainableParameter(Role = PersistentTensorRole.Weights)]
+
     private Tensor<T> _keyWeights;
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
+
     private Tensor<T> _keyBias;
+    [TrainableParameter(Role = PersistentTensorRole.Weights)]
+
     private Tensor<T> _valueWeights;
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
+
     private Tensor<T> _valueBias;
 
     // Per-head decay parameters (gammas): [numHeads]
@@ -97,15 +109,25 @@ public partial class RetNetLayer<T> : LayerBase<T>
     private Tensor<T> _gammas;
 
     // Output gate: [modelDim, modelDim]
+    [TrainableParameter(Role = PersistentTensorRole.Weights)]
+
     private Tensor<T> _outputGateWeights;
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
+
     private Tensor<T> _outputGateBias;
 
     // Output projection: [modelDim, modelDim]
+    [TrainableParameter(Role = PersistentTensorRole.Weights)]
+
     private Tensor<T> _outputProjectionWeights;
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
+
     private Tensor<T> _outputProjectionBias;
 
     // Group normalization parameters per head: scale [numHeads, headDim] and bias [numHeads, headDim]
     private Tensor<T> _groupNormScale;
+    [TrainableParameter(Role = PersistentTensorRole.Biases)]
+
     private Tensor<T> _groupNormBias;
 
     // Cached values for backward pass
