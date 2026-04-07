@@ -45,6 +45,8 @@ namespace AiDotNet.ContinualLearning;
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("Memory Aware Synapses: Learning What (Not) to Forget", "https://arxiv.org/abs/1711.09601", Year = 2018, Authors = "Rahaf Aljundi, Francesca Babiloni, Mohamed Elhoseiny, Marcus Rohrbach, Tinne Tuytelaars")]
+[ComponentType(ComponentType.ContinualLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class MemoryAwareSynapses<T> : IContinualLearningStrategy<T>
 {
     private readonly INumericOperations<T> _numOps;

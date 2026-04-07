@@ -48,6 +48,8 @@ namespace AiDotNet.ContinualLearning;
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("Variational Continual Learning", "https://arxiv.org/abs/1710.10628", Year = 2018, Authors = "Cuong V. Nguyen, Yingzhen Li, Thang D. Bui, Richard E. Turner")]
+[ComponentType(ComponentType.ContinualLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class VariationalContinualLearning<T> : IContinualLearningStrategy<T>
 {
     private readonly INumericOperations<T> _numOps;

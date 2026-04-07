@@ -90,6 +90,8 @@ public class PNNOptions<T>
 [ModelComplexity(ModelComplexity.High)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("Progressive Neural Networks", "https://arxiv.org/abs/1606.04671", Year = 2016, Authors = "Andrei A. Rusu, Neil C. Rabinowitz, Guillaume Desjardins, Hubert Soyer, James Kirkpatrick, Koray Kavukcuoglu, Razvan Pascanu, Raia Hadsell")]
+[ComponentType(ComponentType.ContinualLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class ProgressiveNeuralNetworks<T, TInput, TOutput> : ContinualLearningStrategyBase<T, TInput, TOutput>
 {
     private readonly int? _hiddenUnitsPerColumn;

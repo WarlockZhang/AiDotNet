@@ -146,6 +146,8 @@ public enum ImportanceAccumulationMode
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("Continual Learning Through Synaptic Intelligence", "https://arxiv.org/abs/1703.04200", Year = 2017, Authors = "Friedemann Zenke, Ben Poole, Surya Ganguli")]
+[ComponentType(ComponentType.ContinualLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class SynapticIntelligence<T, TInput, TOutput> : ContinualLearningStrategyBase<T, TInput, TOutput>
 {
     private readonly T _lambda;

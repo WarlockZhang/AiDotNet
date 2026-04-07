@@ -132,6 +132,8 @@ public enum DistillationLossType
 [ModelComplexity(ModelComplexity.Medium)]
 [ModelInput(typeof(Tensor<>), typeof(Tensor<>))]
 [ModelPaper("Learning without Forgetting", "https://arxiv.org/abs/1606.09282", Year = 2017, Authors = "Zhizhong Li, Derek Hoiem")]
+[ComponentType(ComponentType.ContinualLearner)]
+[PipelineStage(PipelineStage.Training)]
 public class LearningWithoutForgetting<T, TInput, TOutput>
     : ContinualLearningStrategyBase<T, TInput, TOutput>,
       IDistillationStrategy<T, TInput, TOutput>
