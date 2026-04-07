@@ -2540,6 +2540,22 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             // Debug: track gradient stats for diagnostics
             _lastGradientCount = grads.Count;
             _lastParameterCount = trainableParams.Count;
+
+            // Debug: check if any gradient was non-zero
+            _lastNonZeroGradCount = 0;
+            foreach (var (param, grad) in grads)
+            {
+                for (int g = 0; g < grad.Length; g++)
+                {
+                    if (NumOps.ToDouble(grad.GetFlat(g)) != 0.0)
+                    {
+                        _lastNonZeroGradCount++;
+                        break;
+                    }
+                }
+            }
+            // Check if loss has GradFn
+            _lastLossHasGradFn = lossTensor.GradFn != null;
             _lastTapeWasActive = true;
             _lastLossLength = lossTensor.Length;
             _lastLossValue = lossTensor.Length > 0 ? NumOps.ToDouble(lossTensor[0]) : -999;
@@ -2655,6 +2671,8 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     internal double _lastLossValue;
     internal bool _forwardTapeActive;
     internal int _forwardTapeEntriesAfter;
+    internal int _lastNonZeroGradCount;
+    internal bool _lastLossHasGradFn;
 
     /// <summary>
     /// Original tensor references saved before buffer view replacement.

@@ -159,6 +159,8 @@ public class ParameterBufferScopeTests
                 $"LossVal: {network._lastLossValue:F8}\n" +
                 $"ForwardTapeActive: {network._forwardTapeActive}\n" +
                 $"ForwardTapeEntriesAfter: {network._forwardTapeEntriesAfter}\n" +
+                $"NonZeroGrads: {network._lastNonZeroGradCount}\n" +
+                $"LossHasGradFn: {network._lastLossHasGradFn}\n" +
                 $"Before: {string.Join(" | ", debugBefore)}\n" +
                 $"After:  {string.Join(" | ", debugAfter)}");
         }
