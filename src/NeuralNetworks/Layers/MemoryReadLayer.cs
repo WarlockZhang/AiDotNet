@@ -597,7 +597,7 @@ public partial class MemoryReadLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     public override IReadOnlyList<LayerPort> InputPorts =>
     [
         new LayerPort("query", GetInputShape()),
-        new LayerPort("memory", GetInputShape())
+        new LayerPort("memory", GetOutputShape(), Required: false)
     ];
 
     /// <summary>

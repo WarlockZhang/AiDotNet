@@ -680,7 +680,7 @@ public class TransformerDecoderLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     public override IReadOnlyList<LayerPort> InputPorts =>
     [
         new LayerPort("decoder_input", GetInputShape()),
-        new LayerPort("encoder_output", GetInputShape())
+        new LayerPort("encoder_output", GetInputShape(), Required: false)
     ];
 
     /// <summary>
@@ -688,9 +688,10 @@ public class TransformerDecoderLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
     /// </summary>
     public override Tensor<T> Forward(IReadOnlyDictionary<string, Tensor<T>> inputs)
     {
+        if (inputs == null) throw new ArgumentNullException(nameof(inputs));
         if (!inputs.TryGetValue("decoder_input", out var decoderInput))
             throw new ArgumentException("TransformerDecoderLayer requires 'decoder_input'.", nameof(inputs));
-        // encoder_output optional — falls back to decoder-only mode (parity with Forward(Tensor<T>))
+        // encoder_output optional — falls back to decoder-only mode
         if (!inputs.TryGetValue("encoder_output", out var encoderOutput))
             return Forward(decoderInput, decoderInput);
         return Forward(decoderInput, encoderOutput);
