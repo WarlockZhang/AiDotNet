@@ -1,4 +1,4 @@
-﻿#pragma warning disable CS0649, CS0414, CS0169
+#pragma warning disable CS0649, CS0414, CS0169
 using AiDotNet.Autodiff;
 using AiDotNet.Interfaces;
 using AiDotNet.Interpretability;
@@ -2408,54 +2408,77 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     protected void TrainWithTape(Tensor<T> input, Tensor<T> expected,
         IGradientBasedOptimizer<T, Tensor<T>, Tensor<T>>? optimizer = null)
     {
-        var engine = AiDotNetEngine.Current;
-
-        // Initialize parameter buffer BEFORE collecting params and running the forward pass.
+        // Initialize parameter buffer — replaces layer tensors with buffer-backed views.
+        // try/finally MUST cover this so views are restored even if setup throws.
         var initialParams = Training.TapeTrainingStep<T>.CollectParameters(Layers, _parameterBuffer is null ? -1 : _layerStructureVersion);
         var paramBuffer = GetOrCreateParameterBuffer(initialParams);
 
-        // Re-collect after buffer initialization — parameter tensor references may have changed
-        var trainableParams = Training.TapeTrainingStep<T>.CollectParameters(Layers, _layerStructureVersion);
-
-        var loss = LossFunction as LossFunctions.LossFunctionBase<T>
-            ?? throw new InvalidOperationException("LossFunction must derive from LossFunctionBase<T> for tape-based training.");
-
-        // Forward + loss under tape — uses the buffer-backed view tensors
-        using var tape = new GradientTape<T>();
-        var output = ForwardForTraining(input);
-
-        // Align output shape to target: squeeze leading batch dim when batch=1
-        // (ForwardForTraining may add a batch dim that the target doesn't have)
-        if (output.Rank > expected.Rank && output.Shape[0] == 1 && output.Length == expected.Length)
+        try
         {
-            output = output.Reshape(expected._shape);
+            // Re-collect after buffer initialization — references are now views
+            var trainableParams = Training.TapeTrainingStep<T>.CollectParameters(Layers, _layerStructureVersion);
+
+            var loss = LossFunction as LossFunctions.LossFunctionBase<T>
+                ?? throw new InvalidOperationException("LossFunction must derive from LossFunctionBase<T> for tape-based training.");
+            // Forward + loss under tape — uses the buffer-backed view tensors
+            using var tape = new GradientTape<T>();
+            var output = ForwardForTraining(input);
+
+            // Align output shape to target: squeeze leading batch dim when batch=1
+            // (ForwardForTraining may add a batch dim that the target doesn't have)
+            if (output.Rank > expected.Rank && output.Shape[0] == 1 && output.Length == expected.Length)
+            {
+                output = output.Reshape(expected._shape);
+            }
+            else if (expected.Rank > output.Rank && expected.Shape[0] == 1 && expected.Length == output.Length)
+            {
+                expected = expected.Reshape(output._shape);
+            }
+
+            var lossTensor = loss.ComputeTapeLoss(output, expected);
+
+            // Compute all gradients then filter to trainable params.
+            // Passing sources directly can miss parameters when the tape backward
+            // can't match view tensor references through the GradFn chain.
+            var allGrads = tape.ComputeGradients(lossTensor, sources: null);
+            var grads = new Dictionary<Tensor<T>, Tensor<T>>(
+                Helpers.TensorReferenceComparer<Tensor<T>>.Instance);
+            foreach (var param in trainableParams)
+            {
+                if (allGrads.TryGetValue(param, out var grad))
+                    grads[param] = grad;
+            }
+
+            T lossValue = lossTensor.Length > 0 ? lossTensor[0] : NumOps.Zero;
+            LastLoss = lossValue;
+
+
+            // Resolve optimizer
+            var opt = optimizer ?? GetOrCreateBaseOptimizer();
+
+            // Re-evaluation callback applies same shape alignment as initial forward
+            Tensor<T> ComputeForward(Tensor<T> inp, Tensor<T> tgt)
+            {
+                var fwd = ForwardForTraining(inp);
+                if (fwd.Rank > tgt.Rank && fwd.Shape[0] == 1 && fwd.Length == tgt.Length)
+                    fwd = fwd.Reshape(tgt._shape);
+                return fwd;
+            }
+
+            var context = new TapeStepContext<T>(
+                trainableParams, grads, lossValue,
+                input, expected, ComputeForward,
+                (pred, tgt) => loss.ComputeTapeLoss(pred, tgt),
+                paramBuffer);
+
+            opt.Step(context);
         }
-        else if (expected.Rank > output.Rank && expected.Shape[0] == 1 && expected.Length == output.Length)
+        finally
         {
-            expected = expected.Reshape(output._shape);
+            // Restore original tensor references so Clone/serialization see real tensors.
+            // Copies updated weights from buffer views back to originals before restoring.
+            RestoreOriginalParameters();
         }
-
-        var lossTensor = loss.ComputeTapeLoss(output, expected);
-
-        // Compute gradients
-        var grads = tape.ComputeGradients(lossTensor, trainableParams);
-
-        T lossValue = lossTensor.Length > 0 ? lossTensor[0] : NumOps.Zero;
-        LastLoss = lossValue;
-
-        // Resolve optimizer
-        var opt = optimizer ?? GetOrCreateBaseOptimizer();
-
-        // Build context with re-evaluation support and zero-copy buffer
-        Tensor<T> ComputeForward(Tensor<T> inp, Tensor<T> _) => ForwardForTraining(inp);
-
-        var context = new TapeStepContext<T>(
-            trainableParams, grads, lossValue,
-            input, expected, ComputeForward,
-            (pred, tgt) => loss.ComputeTapeLoss(pred, tgt),
-            paramBuffer);
-
-        opt.Step(context);
     }
 
     /// <summary>
@@ -2538,6 +2561,13 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     private ParameterBuffer<T>? _parameterBuffer;
 
     /// <summary>
+    /// <summary>
+    /// Original tensor references saved before buffer view replacement.
+    /// Restored after each training step so Clone/serialization see real tensors.
+    /// </summary>
+    private Dictionary<ILayer<T>, IReadOnlyList<Tensor<T>>>? _savedOriginalParameters;
+
+    /// <summary>
     /// Gets or lazily creates the contiguous parameter buffer from the current trainable parameters.
     /// </summary>
     private ParameterBuffer<T>? GetOrCreateParameterBuffer(IReadOnlyList<Tensor<T>> trainableParams)
@@ -2569,6 +2599,10 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             Helpers.TensorReferenceComparer<Tensor<T>>.Instance);
         for (int i = 0; i < trainableParams.Count; i++)
             paramToView[trainableParams[i]] = views[i];
+
+        // Save original tensor references before replacement so we can restore later
+        _savedOriginalParameters = new Dictionary<ILayer<T>, IReadOnlyList<Tensor<T>>>();
+        SaveOriginalParameters(Layers, _savedOriginalParameters, new HashSet<ILayer<T>>());
 
         // Replace each layer's parameters with their buffer-backed views.
         var seenLayers = new HashSet<ILayer<T>>();
@@ -2617,6 +2651,73 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             if (subLayers.Count > 0)
                 ReplaceParametersFromMap(subLayers, paramToView, seenLayers);
         }
+    }
+
+    /// <summary>
+    /// Saves original tensor references from all trainable layers before buffer view replacement.
+    /// </summary>
+    private static void SaveOriginalParameters(
+        IEnumerable<ILayer<T>> layers,
+        Dictionary<ILayer<T>, IReadOnlyList<Tensor<T>>> saved,
+        HashSet<ILayer<T>> seen)
+    {
+        foreach (var layer in layers)
+        {
+            if (!seen.Add(layer)) continue;
+
+            if (layer is ITrainableLayer<T> trainable)
+            {
+                var current = trainable.GetTrainableParameters();
+                // Clone the list so we have the original references, not the views
+                saved[layer] = current.ToArray();
+            }
+
+            var subLayers = layer.GetSubLayers();
+            if (subLayers.Count > 0)
+                SaveOriginalParameters(subLayers, saved, seen);
+        }
+    }
+
+    /// <summary>
+    /// Restores original tensor references on all layers after a training step.
+    /// Copies updated data from buffer views back to the original tensors first.
+    /// </summary>
+    private void RestoreOriginalParameters()
+    {
+        if (_savedOriginalParameters == null)
+            return;
+
+        // For each layer, copy updated data from the current (view) tensors
+        // back to the saved original tensors, then restore the originals.
+        foreach (var (layer, originals) in _savedOriginalParameters)
+        {
+            if (layer is ITrainableLayer<T> trainable)
+            {
+                var currentViews = trainable.GetTrainableParameters();
+                if (currentViews.Count != originals.Count)
+                    throw new InvalidOperationException(
+                        $"Parameter count changed during training step: expected {originals.Count}, got {currentViews.Count}.");
+
+                for (int i = 0; i < originals.Count; i++)
+                {
+                    var view = currentViews[i];
+                    var orig = originals[i];
+                    if (view.Length != orig.Length)
+                        throw new InvalidOperationException(
+                            $"Parameter {i} size changed: expected {orig.Length}, got {view.Length}.");
+                    for (int j = 0; j < view.Length; j++)
+                        orig.SetFlat(j, view.GetFlat(j));
+                }
+
+                trainable.SetTrainableParameters(originals);
+            }
+        }
+
+        _savedOriginalParameters = null;
+        // Clear buffer so next training step creates fresh views
+        _parameterBuffer = null;
+        // Invalidate the tape parameter cache so next CollectParameters re-walks
+        _layerStructureVersion++;
     }
 
     /// <summary>
