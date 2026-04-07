@@ -53,6 +53,10 @@ public sealed class ResearchPaperAttribute : Attribute
     /// <param name="url">The URL where the paper can be accessed.</param>
     public ResearchPaperAttribute(string title, string url)
     {
+        if (string.IsNullOrWhiteSpace(title))
+            throw new ArgumentException("Paper title must not be empty.", nameof(title));
+        if (string.IsNullOrWhiteSpace(url) || !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Paper URL must be a valid https:// link.", nameof(url));
         Title = title;
         Url = url;
     }
