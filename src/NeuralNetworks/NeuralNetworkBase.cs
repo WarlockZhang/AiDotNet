@@ -2080,12 +2080,49 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     }
 
     /// <summary>
-    /// Compiles the forward pass into an optimized executable function via JIT compilation.
-    /// After compilation, <see cref="Predict"/> and <see cref="ForwardWithMemory"/> use the
-    /// compiled function for zero-allocation, fused-kernel execution.
+    /// Compiled inference cache — auto-compiles forward pass on first call,
+    /// replays compiled plan on subsequent calls. Thread-local for safety.
     /// </summary>
-    /// <param name="sampleInput">A sample input tensor to trace the computation graph shapes.</param>
-    /// <param name="options">Optional JIT compiler options. Null uses defaults (all optimizations enabled).</param>
+    [ThreadStatic]
+    private static AiDotNet.Tensors.Engines.Compilation.CompiledModelCache<T>? _compiledInferenceCache;
+
+    /// <summary>
+    /// Executes the forward pass using a compiled plan for maximum performance.
+    /// First call traces and compiles; subsequent calls replay the compiled plan.
+    /// Falls back to eager execution if compilation fails.
+    /// </summary>
+    /// <param name="input">The input tensor.</param>
+    /// <returns>The network output from the compiled plan.</returns>
+    protected Tensor<T> PredictCompiled(Tensor<T> input)
+    {
+        if (!AiDotNet.Tensors.Engines.Optimization.TensorCodecOptions.Current.EnableCompilation)
+            return PredictEager(input);
+
+        try
+        {
+            var cache = _compiledInferenceCache ??= new AiDotNet.Tensors.Engines.Compilation.CompiledModelCache<T>();
+            var plan = cache.GetOrCompileInference(
+                input._shape,
+                () => ForwardForTraining(input));
+            return plan.Execute();
+        }
+        catch
+        {
+            // Compilation failed — fall back to eager
+            return PredictEager(input);
+        }
+    }
+
+    /// <summary>
+    /// Eager forward pass through all layers. Used as fallback when compilation fails.
+    /// </summary>
+    protected virtual Tensor<T> PredictEager(Tensor<T> input)
+    {
+        var current = input;
+        foreach (var layer in Layers)
+            current = layer.Forward(current);
+        return current;
+    }
 
     /// <summary>
     /// Updates the network's parameters with new values.
