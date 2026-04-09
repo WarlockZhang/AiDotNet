@@ -1,3 +1,6 @@
+using System.Text;
+using AiDotNet.ActivationFunctions;
+using AiDotNet.Interfaces;
 using AiDotNet.NeuralNetworks.Layers;
 using AiDotNet.Tensors.Engines;
 using AiDotNet.Tensors.Engines.Compilation;
@@ -76,50 +79,28 @@ public class CompiledTapeTrainingStepTests
         bool allSame = compiledLosses.All(l => l == compiledLosses[0]);
         if (allSame)
         {
-            // Direct investigation: bypass DenseLayer, use raw engine ops
             var engine = AiDotNetEngine.Current;
-            var cache2 = new CompiledModelCache<float>();
-
-            // Use layer's actual weight/bias tensors directly
             var w1Params = compiledLayers[0].GetTrainableParameters();
             var w2Params = compiledLayers[1].GetTrainableParameters();
             var allParams = w1Params.Concat(w2Params).ToArray();
 
-            var plan2 = cache2.GetOrCompileTraining(
-                input.Shape.ToArray(),
-                () =>
-                {
-                    // Raw engine ops — no DenseLayer.Forward
-                    var h = engine.FusedLinear(input, w1Params[0], w1Params[1], FusedActivationType.None);
-                    h = engine.ReLU(h);
-                    var pred = engine.FusedLinear(h, w2Params[0], w2Params[1], FusedActivationType.None);
-                    var diff = engine.TensorSubtract(pred, target);
-                    var sq = engine.TensorMultiply(diff, diff);
-                    engine.ReduceSum(sq, null);
-                },
-                allParams);
+            var rawDump = DumpGraph(allParams, input, target, () =>
+            {
+                var h = engine.FusedLinear(input, w1Params[0], w1Params[1], FusedActivationType.None);
+                h = engine.ReLU(h);
+                var pred = engine.FusedLinear(h, w2Params[0], w2Params[1], FusedActivationType.None);
+                var diff = engine.TensorSubtract(pred, target);
+                var sq = engine.TensorMultiply(diff, diff);
+                engine.ReduceSum(sq, null);
+            });
 
-            var stepResult2 = plan2.Step();
-            var grads2 = plan2.Gradients;
-            float gradNorm2 = grads2.Where(g => g is not null).Sum(g => g.AsSpan().ToArray().Sum(v => v * v));
+            var layerDump = DumpGraph(allParams, input, target, () =>
+            {
+                var pred = compiledForward(input);
+                mseLoss(pred, target);
+            });
 
-            // Now try through DenseLayer.Forward
-            CompiledTapeTrainingStep<float>.Invalidate();
-            var cache3 = new CompiledModelCache<float>();
-            var plan3 = cache3.GetOrCompileTraining(
-                input.Shape.ToArray(),
-                () => { var pred = compiledForward(input); mseLoss(pred, target); },
-                allParams);
-
-            var stepResult3 = plan3.Step();
-            var grads3 = plan3.Gradients;
-            float gradNorm3 = grads3.Where(g => g is not null).Sum(g => g.AsSpan().ToArray().Sum(v => v * v));
-
-            Assert.Fail(
-                $"Raw engine ops: grad L2={Math.Sqrt(gradNorm2):F6}, loss={stepResult2[0]:F4}. " +
-                $"DenseLayer.Forward: grad L2={Math.Sqrt(gradNorm3):F6}, loss={stepResult3[0]:F4}. " +
-                $"Params: {allParams.Length}. " +
-                $"If raw has grads but DenseLayer doesn't, the issue is in DenseLayer.Forward under GraphMode.");
+            Assert.Fail($"RAW:\n{rawDump}\nDENSELAYER:\n{layerDump}");
         }
     }
 
@@ -242,16 +223,16 @@ public class CompiledTapeTrainingStepTests
 
     private static (List<DenseLayer<float>> layers, Func<Tensor<float>, Tensor<float>> forward) BuildMLP(Random rng)
     {
+        // DenseLayer defaults to ReLU activation — don't apply ReLU externally
         var layer1 = new DenseLayer<float>(4, 8);
-        var layer2 = new DenseLayer<float>(8, 2);
+        // Last layer: no activation (linear output for regression)
+        var layer2 = new DenseLayer<float>(8, 2, (IActivationFunction<float>)new IdentityActivation<float>());
         var layers = new List<DenseLayer<float>> { layer1, layer2 };
 
         Tensor<float> Forward(Tensor<float> x)
         {
-            var engine = AiDotNetEngine.Current;
-            var h = layer1.Forward(x);
-            h = engine.ReLU(h);
-            return layer2.Forward(h);
+            var h = layer1.Forward(x);  // Includes ReLU activation
+            return layer2.Forward(h);   // Linear output (identity activation)
         }
 
         return (layers, Forward);
@@ -266,5 +247,11 @@ public class CompiledTapeTrainingStepTests
         for (int i = 0; i < length; i++)
             data[i] = (float)(rng.NextDouble() * 2 - 1);
         return new Tensor<float>(data, shape);
+    }
+
+    private static string DumpGraph(Tensor<float>[] parameters, Tensor<float> input, Tensor<float> target, Action traceAction)
+    {
+        // Use AiDotNet's internal access to GraphMode to dump the graph
+        return AiDotNet.Helpers.GraphModeDiagnostics.DumpCompiledGraph(parameters, input, target, traceAction);
     }
 }
