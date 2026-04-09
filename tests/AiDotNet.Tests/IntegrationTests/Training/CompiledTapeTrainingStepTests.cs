@@ -73,27 +73,53 @@ public class CompiledTapeTrainingStepTests
             $"Eager loss should decrease: first={eagerLosses[0]:F4}, last={eagerLosses[^1]:F4}");
 
         // Diagnostic: check if compiled actually changes params
-        // If all losses are identical, gradients may be null
         bool allSame = compiledLosses.All(l => l == compiledLosses[0]);
         if (allSame)
         {
-            // Direct investigation: run one compiled step and check gradients
-            CompiledTapeTrainingStep<float>.Invalidate();
-            var diagLoss = CompiledTapeTrainingStep<float>.Step(
-                compiledLayers, input, target, lr, compiledForward, mseLoss);
+            // Direct investigation: bypass DenseLayer, use raw engine ops
+            var engine = AiDotNetEngine.Current;
+            var cache2 = new CompiledModelCache<float>();
 
-            // Check if layer parameters changed from initial
-            var w1 = compiledLayers[0].GetTrainableParameters();
-            var w2 = compiledLayers[1].GetTrainableParameters();
-            var w1Sum = w1.Sum(p => p.AsSpan().ToArray().Sum());
-            var w2Sum = w2.Sum(p => p.AsSpan().ToArray().Sum());
+            // Use layer's actual weight/bias tensors directly
+            var w1Params = compiledLayers[0].GetTrainableParameters();
+            var w2Params = compiledLayers[1].GetTrainableParameters();
+            var allParams = w1Params.Concat(w2Params).ToArray();
+
+            var plan2 = cache2.GetOrCompileTraining(
+                input.Shape.ToArray(),
+                () =>
+                {
+                    // Raw engine ops — no DenseLayer.Forward
+                    var h = engine.FusedLinear(input, w1Params[0], w1Params[1], FusedActivationType.None);
+                    h = engine.ReLU(h);
+                    var pred = engine.FusedLinear(h, w2Params[0], w2Params[1], FusedActivationType.None);
+                    var diff = engine.TensorSubtract(pred, target);
+                    var sq = engine.TensorMultiply(diff, diff);
+                    engine.ReduceSum(sq, null);
+                },
+                allParams);
+
+            var stepResult2 = plan2.Step();
+            var grads2 = plan2.Gradients;
+            float gradNorm2 = grads2.Where(g => g is not null).Sum(g => g.AsSpan().ToArray().Sum(v => v * v));
+
+            // Now try through DenseLayer.Forward
+            CompiledTapeTrainingStep<float>.Invalidate();
+            var cache3 = new CompiledModelCache<float>();
+            var plan3 = cache3.GetOrCompileTraining(
+                input.Shape.ToArray(),
+                () => { var pred = compiledForward(input); mseLoss(pred, target); },
+                allParams);
+
+            var stepResult3 = plan3.Step();
+            var grads3 = plan3.Gradients;
+            float gradNorm3 = grads3.Where(g => g is not null).Sum(g => g.AsSpan().ToArray().Sum(v => v * v));
 
             Assert.Fail(
-                $"Compiled loss constant at {compiledLosses[0]:F4} across {compiledLosses.Count} steps. " +
-                $"Layer1 param count={w1.Count}, param sum={w1Sum:F4}. " +
-                $"Layer2 param count={w2.Count}, param sum={w2Sum:F4}. " +
-                $"Diag step loss={Convert.ToSingle(diagLoss):F4}. " +
-                "This indicates gradients are null or SGD is not updating parameters.");
+                $"Raw engine ops: grad L2={Math.Sqrt(gradNorm2):F6}, loss={stepResult2[0]:F4}. " +
+                $"DenseLayer.Forward: grad L2={Math.Sqrt(gradNorm3):F6}, loss={stepResult3[0]:F4}. " +
+                $"Params: {allParams.Length}. " +
+                $"If raw has grads but DenseLayer doesn't, the issue is in DenseLayer.Forward under GraphMode.");
         }
     }
 
