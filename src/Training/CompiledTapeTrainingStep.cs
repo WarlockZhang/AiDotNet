@@ -65,17 +65,29 @@ public static class CompiledTapeTrainingStep<T>
         var numOps = MathHelper.GetNumericOperations<T>();
         var engine = AiDotNetEngine.Current;
 
-        // Cache parameters — only rebuild when layers change (via Invalidate)
-        var parameters = _cachedParameters ??= CollectParameterArray(layers);
-
         try
         {
             var cache = _cache ??= new CompiledModelCache<T>();
 
-            // Detect shape change — triggers recompilation
+            // Detect shape change — triggers recompilation and parameter re-collection
             bool shapeChanged = !ShapeMatches(input._shape, _lastInputShape);
             if (shapeChanged)
-                _lastInputShape = input._shape; // No clone — _shape is the internal array
+            {
+                _lastInputShape = input._shape;
+                _cachedParameters = null;
+            }
+
+            // Force layer initialization before collecting parameters.
+            // DenseLayer.EnsureInitialized() replaces _weights with a new tensor on
+            // first Forward — collecting before that captures stale placeholder tensors.
+            // A dry-run forward triggers initialization without GraphMode recording.
+            if (_cachedParameters is null)
+            {
+                forward(input);
+            }
+
+            // Now safe to collect — layers are initialized, tensors are final
+            var parameters = _cachedParameters ??= CollectParameterArray(layers);
 
             // Zero gradients before forward pass
             foreach (var layer in layers)

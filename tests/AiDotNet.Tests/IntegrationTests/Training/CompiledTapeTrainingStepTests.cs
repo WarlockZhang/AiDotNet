@@ -72,13 +72,29 @@ public class CompiledTapeTrainingStepTests
         Assert.True(eagerLosses[^1] < eagerLosses[0],
             $"Eager loss should decrease: first={eagerLosses[0]:F4}, last={eagerLosses[^1]:F4}");
 
-        // Compiled loss: at minimum should not be constant (parameters are being updated)
-        // The compiled plan replays using the same tensor objects, so SGD updates
-        // should be visible. If loss is constant, the plan isn't reading updated params.
-        bool compiledChanged = compiledLosses[^1] != compiledLosses[0];
-        Assert.True(compiledChanged,
-            $"Compiled loss should change across steps: first={compiledLosses[0]:F4}, last={compiledLosses[^1]:F4}. " +
-            "If constant, compiled plan isn't reading updated parameter data.");
+        // Diagnostic: check if compiled actually changes params
+        // If all losses are identical, gradients may be null
+        bool allSame = compiledLosses.All(l => l == compiledLosses[0]);
+        if (allSame)
+        {
+            // Direct investigation: run one compiled step and check gradients
+            CompiledTapeTrainingStep<float>.Invalidate();
+            var diagLoss = CompiledTapeTrainingStep<float>.Step(
+                compiledLayers, input, target, lr, compiledForward, mseLoss);
+
+            // Check if layer parameters changed from initial
+            var w1 = compiledLayers[0].GetTrainableParameters();
+            var w2 = compiledLayers[1].GetTrainableParameters();
+            var w1Sum = w1.Sum(p => p.AsSpan().ToArray().Sum());
+            var w2Sum = w2.Sum(p => p.AsSpan().ToArray().Sum());
+
+            Assert.Fail(
+                $"Compiled loss constant at {compiledLosses[0]:F4} across {compiledLosses.Count} steps. " +
+                $"Layer1 param count={w1.Count}, param sum={w1Sum:F4}. " +
+                $"Layer2 param count={w2.Count}, param sum={w2Sum:F4}. " +
+                $"Diag step loss={Convert.ToSingle(diagLoss):F4}. " +
+                "This indicates gradients are null or SGD is not updating parameters.");
+        }
     }
 
     /// <summary>
