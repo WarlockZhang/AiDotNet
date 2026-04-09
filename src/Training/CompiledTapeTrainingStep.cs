@@ -4,7 +4,6 @@ using AiDotNet.Tensors.Engines.Compilation;
 using AiDotNet.Tensors.Engines.Optimization;
 using AiDotNet.Tensors.Helpers;
 using AiDotNet.Tensors.LinearAlgebra;
-using Microsoft.Extensions.Logging;
 
 namespace AiDotNet.Training;
 
@@ -33,24 +32,13 @@ public static class CompiledTapeTrainingStep<T>
     [ThreadStatic]
     private static CompiledModelCache<T>? _cache;
     [ThreadStatic]
-    private static int[]? _lastInputShape;
-    [ThreadStatic]
     private static Tensor<T>[]? _cachedParameters;
-
-    private static readonly ILogger? _logger = LoggerFactory.Create(b => { }).CreateLogger(typeof(CompiledTapeTrainingStep<T>).Name);
 
     /// <summary>
     /// Executes a single compiled training step.
     /// First call traces and compiles; subsequent calls replay the compiled plan.
     /// Falls back to eager execution if compilation fails.
     /// </summary>
-    /// <param name="layers">Trainable layers of the model.</param>
-    /// <param name="input">Input tensor for this batch.</param>
-    /// <param name="target">Target tensor for loss computation.</param>
-    /// <param name="learningRate">SGD learning rate.</param>
-    /// <param name="forward">Forward pass function: input -> prediction.</param>
-    /// <param name="computeLoss">Loss function: (prediction, target) -> loss scalar.</param>
-    /// <returns>The scalar loss value for this step.</returns>
     public static T Step(
         IReadOnlyList<ITrainableLayer<T>> layers,
         Tensor<T> input,
@@ -69,33 +57,21 @@ public static class CompiledTapeTrainingStep<T>
         {
             var cache = _cache ??= new CompiledModelCache<T>();
 
-            // Detect shape change — triggers recompilation and parameter re-collection
-            bool shapeChanged = !ShapeMatches(input._shape, _lastInputShape);
-            if (shapeChanged)
-            {
-                _lastInputShape = input._shape;
-                _cachedParameters = null;
-            }
-
             // Force layer initialization before collecting parameters.
             // DenseLayer.EnsureInitialized() replaces _weights with a new tensor on
             // first Forward — collecting before that captures stale placeholder tensors.
-            // A dry-run forward triggers initialization without GraphMode recording.
             if (_cachedParameters is null)
-            {
                 forward(input);
-            }
 
-            // Now safe to collect — layers are initialized, tensors are final
             var parameters = _cachedParameters ??= CollectParameterArray(layers);
 
             // Zero gradients before forward pass
             foreach (var layer in layers)
                 layer.ZeroGrad();
 
-            // Get or compile training plan (cached by shape)
+            // Get or compile training plan (cached by shape internally)
             var plan = cache.GetOrCompileTraining(
-                input._shape,
+                (int[])input._shape.Clone(),
                 () =>
                 {
                     var predicted = forward(input);
@@ -106,32 +82,25 @@ public static class CompiledTapeTrainingStep<T>
             // Execute compiled forward + backward
             var lossOutput = plan.Step();
 
-            // Update parameters with SGD
-            UpdateParametersSGD(engine, parameters, plan.Gradients, learningRate, numOps);
+            // In-place SGD: param -= lr * grad (zero allocation)
+            UpdateParametersSGD(parameters, plan.Gradients, learningRate, numOps);
 
             return lossOutput.Length > 0 ? lossOutput[0] : numOps.Zero;
         }
-        catch (Exception ex)
+        catch
         {
-            // Log the compilation failure for developer diagnostics
-            _logger?.LogWarning(ex, "Compiled training step failed, falling back to eager execution");
-
-            // Fall back to eager for this step only — next step will retry compilation.
-            // Don't permanently disable compilation; the failure may be transient
-            // (e.g., unsupported op that gets fixed in a later version).
+            // Fall back to eager for this step — next step will retry compilation
             return TapeTrainingStep<T>.Step(layers, input, target, learningRate, forward, computeLoss);
         }
     }
 
     /// <summary>
-    /// Invalidates the compiled plan cache. Call when model structure changes
-    /// (layers added/removed, activation functions changed, etc.).
+    /// Invalidates the compiled plan cache. Call when model structure changes.
     /// </summary>
     public static void Invalidate()
     {
         _cache?.Invalidate();
-        _lastInputShape = null;
-        _cachedParameters = null; // Force parameter re-collection
+        _cachedParameters = null;
     }
 
     private static Tensor<T>[] CollectParameterArray(IReadOnlyList<ITrainableLayer<T>> layers)
@@ -142,28 +111,27 @@ public static class CompiledTapeTrainingStep<T>
         return allParams.ToArray();
     }
 
+    /// <summary>
+    /// In-place SGD: param[i] -= lr * grad[i] for each element.
+    /// Zero allocation — operates directly on the parameter backing arrays.
+    /// </summary>
     private static void UpdateParametersSGD(
-        IEngine engine, Tensor<T>[] parameters, Tensor<T>[] gradients,
+        Tensor<T>[] parameters, Tensor<T>[] gradients,
         T learningRate, INumericOperations<T> numOps)
     {
-        int count = Math.Min(parameters.Length, gradients.Length);
-        for (int i = 0; i < count; i++)
-        {
-            if (gradients[i] is not null)
-            {
-                var update = engine.TensorMultiplyScalar(gradients[i], learningRate);
-                engine.TensorSubtractInPlace(parameters[i], update);
-            }
-        }
-    }
+        if (parameters.Length != gradients.Length)
+            throw new InvalidOperationException(
+                $"Parameter count ({parameters.Length}) does not match gradient count ({gradients.Length}). " +
+                "The compiled plan produced a different number of gradients than expected.");
 
-    private static bool ShapeMatches(int[] a, int[]? b)
-    {
-        if (b is null || a.Length != b.Length) return false;
-        // Reference equality first — same tensor reuses the same _shape array
-        if (ReferenceEquals(a, b)) return true;
-        for (int i = 0; i < a.Length; i++)
-            if (a[i] != b[i]) return false;
-        return true;
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            if (gradients[i] is null) continue;
+
+            var paramSpan = parameters[i].Data.Span;
+            var gradSpan = gradients[i].AsSpan();
+            for (int j = 0; j < paramSpan.Length; j++)
+                paramSpan[j] = numOps.Subtract(paramSpan[j], numOps.Multiply(learningRate, gradSpan[j]));
+        }
     }
 }

@@ -2081,18 +2081,16 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
 
     /// <summary>
     /// Compiled inference cache — auto-compiles forward pass on first call,
-    /// replays compiled plan on subsequent calls. Thread-local for safety.
+    /// replays compiled plan on subsequent calls. Per-instance to prevent
+    /// cross-model cache hits (different models produce different graphs).
     /// </summary>
-    [ThreadStatic]
-    private static AiDotNet.Tensors.Engines.Compilation.CompiledModelCache<T>? _compiledInferenceCache;
+    private AiDotNet.Tensors.Engines.Compilation.CompiledModelCache<T>? _compiledInferenceCache;
 
     /// <summary>
     /// Executes the forward pass using a compiled plan for maximum performance.
     /// First call traces and compiles; subsequent calls replay the compiled plan.
     /// Falls back to eager execution if compilation fails.
     /// </summary>
-    /// <param name="input">The input tensor.</param>
-    /// <returns>The network output from the compiled plan.</returns>
     protected Tensor<T> PredictCompiled(Tensor<T> input)
     {
         if (!AiDotNet.Tensors.Engines.Optimization.TensorCodecOptions.Current.EnableCompilation)
@@ -2102,13 +2100,12 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
         {
             var cache = _compiledInferenceCache ??= new AiDotNet.Tensors.Engines.Compilation.CompiledModelCache<T>();
             var plan = cache.GetOrCompileInference(
-                input._shape,
-                () => ForwardForTraining(input));
+                (int[])input._shape.Clone(),
+                () => PredictEager(input)); // Use same path as eager for consistency
             return plan.Execute();
         }
         catch
         {
-            // Compilation failed — fall back to eager
             return PredictEager(input);
         }
     }

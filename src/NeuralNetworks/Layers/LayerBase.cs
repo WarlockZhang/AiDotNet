@@ -2758,6 +2758,8 @@ public abstract class LayerBase<T> : ILayer<T>, ITrainableLayer<T>, IDisposable
             {
                 if (ReferenceEquals(_registeredTensors[i], tensor))
                     return; // Same object, already registered
+                // Unregister old tensor from engine to prevent GPU memory leaks
+                Engine.UnregisterPersistentTensor(_registeredTensors[i]);
                 _registeredTensors[i] = tensor; // Replace with new tensor
                 return;
             }
