@@ -233,7 +233,7 @@ public partial class GraphIsomorphismLayer<T> : LayerBase<T>, IGraphConvolutionL
         }
 
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle tensor shapes for graph processing:
@@ -309,7 +309,7 @@ public partial class GraphIsomorphismLayer<T> : LayerBase<T>, IGraphConvolutionL
         var lastMlpHiddenPreRelu = _lastMlpHiddenPreRelu;
 
         // Apply ReLU activation using Engine operations
-        var zeroTensor = new Tensor<T>(lastMlpHiddenPreRelu.Shape.ToArray());
+        var zeroTensor = new Tensor<T>(lastMlpHiddenPreRelu._shape);
         zeroTensor.Fill(NumOps.Zero);
         _lastMlpHidden = Engine.TensorMax(lastMlpHiddenPreRelu, zeroTensor);
 
@@ -384,10 +384,10 @@ public partial class GraphIsomorphismLayer<T> : LayerBase<T>, IGraphConvolutionL
 
         // Gradient through ReLU: fully vectorized element-wise operations
         var lastMlpHiddenPreRelu = _lastMlpHiddenPreRelu ?? throw new InvalidOperationException("_lastMlpHiddenPreRelu has not been initialized.");
-        var zeroTensor = new Tensor<T>(lastMlpHiddenPreRelu.Shape.ToArray());
+        var zeroTensor = new Tensor<T>(lastMlpHiddenPreRelu._shape);
         Engine.TensorFill(zeroTensor, NumOps.Zero);
         var reluMask = Engine.TensorGreaterThan(lastMlpHiddenPreRelu, zeroTensor);
-        var oneTensor = new Tensor<T>(lastMlpHiddenPreRelu.Shape.ToArray());
+        var oneTensor = new Tensor<T>(lastMlpHiddenPreRelu._shape);
         Engine.TensorFill(oneTensor, NumOps.One);
         var reluDeriv = Engine.TensorWhere(reluMask, oneTensor, zeroTensor);
         var hiddenGrad = Engine.TensorMultiply(hiddenGradPre, reluDeriv);

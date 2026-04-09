@@ -220,7 +220,7 @@ public partial class PrincipalNeighbourhoodAggregationLayer<T> : LayerBase<T>, I
         }
 
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // PNA is a graph layer: normalize to 3D [batch, nodes, features]
@@ -272,7 +272,7 @@ public partial class PrincipalNeighbourhoodAggregationLayer<T> : LayerBase<T>, I
         _lastDegrees = Engine.ReduceSum(_adjacencyMatrix, [2], keepDims: false); // [batch, nodes]
 
         // Avoid division by zero - clamp degrees to minimum of 1
-        var oneTensor = new Tensor<T>(_lastDegrees.Shape.ToArray());
+        var oneTensor = new Tensor<T>(_lastDegrees._shape);
         oneTensor.Fill(NumOps.One);
         var safeDegrees = Engine.TensorMax(_lastDegrees, oneTensor);
 
@@ -299,7 +299,7 @@ public partial class PrincipalNeighbourhoodAggregationLayer<T> : LayerBase<T>, I
         _lastMlpHiddenPreRelu = Engine.TensorAdd(hidden, bias1Broadcast);
 
         // ReLU activation using Engine operations
-        var zeroTensor = new Tensor<T>(_lastMlpHiddenPreRelu.Shape.ToArray());
+        var zeroTensor = new Tensor<T>(_lastMlpHiddenPreRelu._shape);
         zeroTensor.Fill(NumOps.Zero);
         _lastMlpHidden = Engine.TensorMax(_lastMlpHiddenPreRelu, zeroTensor);
 
@@ -376,7 +376,7 @@ public partial class PrincipalNeighbourhoodAggregationLayer<T> : LayerBase<T>, I
         var input = inputs[0];
 
         // Handle batch dimension
-        int[] inputShape = input.Shape.ToArray();
+        int[] inputShape = input._shape;
         int batchSize;
         int numNodes;
         int inputFeatures;
@@ -804,11 +804,11 @@ public partial class PrincipalNeighbourhoodAggregationLayer<T> : LayerBase<T>, I
         var adjExpanded = adjacencyMatrix.Reshape([batchSize, numNodes, numNodes, 1]);
 
         // Mask non-neighbors with -inf
-        var negInf = new Tensor<T>(tiled.Shape.ToArray());
+        var negInf = new Tensor<T>(tiled._shape);
         negInf.Fill(NumOps.MinValue);
 
         // Where adj > 0, use tiled values; else use -inf
-        var zeroTensor = new Tensor<T>(adjExpanded.Shape.ToArray());
+        var zeroTensor = new Tensor<T>(adjExpanded._shape);
         zeroTensor.Fill(NumOps.Zero);
         var mask = Engine.TensorGreaterThan(adjExpanded, zeroTensor);
 
@@ -839,10 +839,10 @@ public partial class PrincipalNeighbourhoodAggregationLayer<T> : LayerBase<T>, I
         var adjExpanded = adjacencyMatrix.Reshape([batchSize, numNodes, numNodes, 1]);
 
         // Mask non-neighbors with +inf
-        var posInf = new Tensor<T>(tiled.Shape.ToArray());
+        var posInf = new Tensor<T>(tiled._shape);
         posInf.Fill(NumOps.MaxValue);
 
-        var zeroTensor = new Tensor<T>(adjExpanded.Shape.ToArray());
+        var zeroTensor = new Tensor<T>(adjExpanded._shape);
         zeroTensor.Fill(NumOps.Zero);
         var mask = Engine.TensorGreaterThan(adjExpanded, zeroTensor);
 
@@ -879,7 +879,7 @@ public partial class PrincipalNeighbourhoodAggregationLayer<T> : LayerBase<T>, I
         var variance = Engine.TensorSubtract(meanSquared, meanSq);
 
         // Add epsilon for numerical stability
-        var epsilon = new Tensor<T>(variance.Shape.ToArray());
+        var epsilon = new Tensor<T>(variance._shape);
         epsilon.Fill(NumOps.FromDouble(1e-8));
         variance = Engine.TensorAdd(variance, epsilon);
 
@@ -1059,10 +1059,10 @@ public partial class PrincipalNeighbourhoodAggregationLayer<T> : LayerBase<T>, I
 
         // ReLU derivative
         var mlpHiddenPreRelu = _lastMlpHiddenPreRelu ?? throw new InvalidOperationException("_lastMlpHiddenPreRelu has not been initialized.");
-        var zeroTensor = new Tensor<T>(mlpHiddenPreRelu.Shape.ToArray());
+        var zeroTensor = new Tensor<T>(mlpHiddenPreRelu._shape);
         zeroTensor.Fill(NumOps.Zero);
         var reluMask = Engine.TensorGreaterThan(mlpHiddenPreRelu, zeroTensor);
-        var oneTensor = new Tensor<T>(mlpHiddenPreRelu.Shape.ToArray());
+        var oneTensor = new Tensor<T>(mlpHiddenPreRelu._shape);
         oneTensor.Fill(NumOps.One);
         var reluDeriv = Engine.TensorWhere(reluMask, oneTensor, zeroTensor);
         var mlpHiddenGrad = Engine.TensorMultiply(mlpHiddenGradPre, reluDeriv);

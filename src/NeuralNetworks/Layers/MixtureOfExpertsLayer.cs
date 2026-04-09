@@ -527,7 +527,7 @@ public partial class MixtureOfExpertsLayer<T> : LayerBase<T>, IAuxiliaryLossLaye
     public override Tensor<T> Forward(Tensor<T> input)
     {
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle any-rank tensor: collapse to 2D for processing
@@ -1340,7 +1340,7 @@ public partial class MixtureOfExpertsLayer<T> : LayerBase<T>, IAuxiliaryLossLaye
 
         // VECTORIZED: Scatter normalized values back to full expert dimension
         // Create zero tensor for sparse weights
-        var sparseWeights = new Tensor<T>(weights.Shape.ToArray());
+        var sparseWeights = new Tensor<T>(weights._shape);
         sparseWeights.Fill(NumOps.Zero);
 
         // Use TensorScatter to place normalized values at correct positions
@@ -1986,7 +1986,7 @@ public partial class MixtureOfExpertsLayer<T> : LayerBase<T>, IAuxiliaryLossLaye
         int batchSize = aData.Shape[0];
         int features = aData.Shape[1];
 
-        var result = TensorAllocator.Rent<T>(aData.Shape.ToArray());
+        var result = TensorAllocator.Rent<T>(aData._shape);
         for (int i = 0; i < batchSize; i++)
         {
             T divisor = bData[i, 0];

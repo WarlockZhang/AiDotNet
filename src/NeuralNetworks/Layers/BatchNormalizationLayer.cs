@@ -356,7 +356,7 @@ public partial class BatchNormalizationLayer<T> : LayerBase<T>, ILayerSerializat
     public override Tensor<T> Forward(Tensor<T> input)
     {
         // Store original shape for backward pass restoration
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
 
         // Auto-reshape 1D input to [1, N] for batch normalization compatibility
         _inputWas1D = input.Shape.Length == 1;
@@ -485,7 +485,7 @@ public partial class BatchNormalizationLayer<T> : LayerBase<T>, ILayerSerializat
         var shiftData = shift.Data.Span;
 
         // Rent output tensor (fully overwritten) and write via Span
-        var output = TensorAllocator.Rent<T>(input.Shape.ToArray());
+        var output = TensorAllocator.Rent<T>(input._shape);
         var outputData = output.Data.Span;
 
         for (int n = 0; n < batch; n++)
@@ -753,13 +753,13 @@ public partial class BatchNormalizationLayer<T> : LayerBase<T>, ILayerSerializat
 
             if (_gammaVelocity == null)
             {
-                _gammaVelocity = new Tensor<T>(_gamma.Shape.ToArray());
+                _gammaVelocity = new Tensor<T>(_gamma._shape);
                 _gammaVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_gammaVelocity, PersistentTensorRole.OptimizerState);
             }
             if (_betaVelocity == null)
             {
-                _betaVelocity = new Tensor<T>(_beta.Shape.ToArray());
+                _betaVelocity = new Tensor<T>(_beta._shape);
                 _betaVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_betaVelocity, PersistentTensorRole.OptimizerState);
             }

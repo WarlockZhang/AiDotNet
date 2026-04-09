@@ -441,7 +441,7 @@ public partial class Conv3DLayer<T> : LayerBase<T>
         _kernels = Engine.TensorRandomUniformRange<T>(_kernels.Shape.ToArray(), NumOps.Negate(scale), scale);
 
         // Initialize biases to zero
-        _biases = new Tensor<T>(_biases.Shape.ToArray());
+        _biases = new Tensor<T>(_biases._shape);
         Engine.TensorFill(_biases, NumOps.Zero);
     }
 
@@ -473,7 +473,7 @@ public partial class Conv3DLayer<T> : LayerBase<T>
     public override Tensor<T> Forward(Tensor<T> input)
     {
         _lastInput = input;
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
 
         Tensor<T> batchedInput;
 

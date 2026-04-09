@@ -426,21 +426,21 @@ public partial class ConditionalRandomFieldLayer<T> : LayerBase<T>
 
         // Initialize transition matrix: (random - 0.5) * scale
         var transRandom = Tensor<T>.CreateRandom(_transitionMatrix.Length, 1).Reshape(_transitionMatrix.Shape.ToArray());
-        var transHalf = new Tensor<T>(_transitionMatrix.Shape.ToArray());
+        var transHalf = new Tensor<T>(_transitionMatrix._shape);
         transHalf.Fill(half);
         var transCentered = Engine.TensorSubtract(transRandom, transHalf);
         _transitionMatrix = Engine.TensorMultiplyScalar(transCentered, scale);
 
         // Initialize start scores: (random - 0.5) * scale
         var startRandom = Tensor<T>.CreateRandom(_startScores.Length, 1).Reshape(_startScores.Shape.ToArray());
-        var startHalf = new Tensor<T>(_startScores.Shape.ToArray());
+        var startHalf = new Tensor<T>(_startScores._shape);
         startHalf.Fill(half);
         var startCentered = Engine.TensorSubtract(startRandom, startHalf);
         _startScores = Engine.TensorMultiplyScalar(startCentered, scale);
 
         // Initialize end scores: (random - 0.5) * scale
         var endRandom = Tensor<T>.CreateRandom(_endScores.Length, 1).Reshape(_endScores.Shape.ToArray());
-        var endHalf = new Tensor<T>(_endScores.Shape.ToArray());
+        var endHalf = new Tensor<T>(_endScores._shape);
         endHalf.Fill(half);
         var endCentered = Engine.TensorSubtract(endRandom, endHalf);
         _endScores = Engine.TensorMultiplyScalar(endCentered, scale);
@@ -488,7 +488,7 @@ public partial class ConditionalRandomFieldLayer<T> : LayerBase<T>
     public override Tensor<T> Forward(Tensor<T> input)
     {
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // CRF expects 3D input: [batchSize, sequenceLength, numClasses]

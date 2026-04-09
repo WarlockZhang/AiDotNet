@@ -718,9 +718,9 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         //   4D [batch1, batch2, seq, dim] -> batch1*batch2, seq, dim
         //   5D [b1, b2, b3, seq, dim] -> b1*b2*b3, seq, dim
 
-        _originalQueryShape = query.Shape.ToArray();
-        _originalKeyShape = key.Shape.ToArray();
-        _originalValueShape = value.Shape.ToArray();
+        _originalQueryShape = query._shape;
+        _originalKeyShape = key._shape;
+        _originalValueShape = value._shape;
 
         // Handle 1D input by reshaping to 2D [1, dim]
         bool was1D = query.Rank == 1;
@@ -908,7 +908,7 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         var input = inputs[0];
 
         // Handle input shape - flatten to 3D [batch, seq, embedding]
-        int[] inputShape = input.Shape.ToArray();
+        int[] inputShape = input._shape;
         int seqLength, embeddingDimension, batchSize;
 
         if (inputShape.Length == 2)
@@ -1059,23 +1059,23 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
 
             if (_queryWeightsVelocity == null)
             {
-                _queryWeightsVelocity = new Tensor<T>(_queryWeights.Shape.ToArray());
+                _queryWeightsVelocity = new Tensor<T>(_queryWeights._shape);
                 _queryWeightsVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_queryWeightsVelocity, PersistentTensorRole.OptimizerState);
 
-                _keyWeightsVelocity = new Tensor<T>(_keyWeights.Shape.ToArray());
+                _keyWeightsVelocity = new Tensor<T>(_keyWeights._shape);
                 _keyWeightsVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_keyWeightsVelocity, PersistentTensorRole.OptimizerState);
 
-                _valueWeightsVelocity = new Tensor<T>(_valueWeights.Shape.ToArray());
+                _valueWeightsVelocity = new Tensor<T>(_valueWeights._shape);
                 _valueWeightsVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_valueWeightsVelocity, PersistentTensorRole.OptimizerState);
 
-                _outputWeightsVelocity = new Tensor<T>(_outputWeights.Shape.ToArray());
+                _outputWeightsVelocity = new Tensor<T>(_outputWeights._shape);
                 _outputWeightsVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_outputWeightsVelocity, PersistentTensorRole.OptimizerState);
 
-                _outputBiasVelocity = new Tensor<T>(_outputBias.Shape.ToArray());
+                _outputBiasVelocity = new Tensor<T>(_outputBias._shape);
                 _outputBiasVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_outputBiasVelocity, PersistentTensorRole.OptimizerState);
             }

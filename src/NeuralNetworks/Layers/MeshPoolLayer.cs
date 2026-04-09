@@ -411,7 +411,7 @@ public partial class MeshPoolLayer<T> : LayerBase<T>
         }
 
         var input = inputs[0];
-        int[] shape = input.Shape.ToArray();
+        int[] shape = input._shape;
 
         if (shape.Length != 2 || shape[1] != InputChannels)
         {

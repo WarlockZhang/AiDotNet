@@ -625,7 +625,7 @@ public partial class GRULayer<T> : LayerBase<T>
     public override Tensor<T> Forward(Tensor<T> input)
     {
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle any-rank tensor: collapse leading dims into batch for rank > 3
@@ -961,7 +961,7 @@ public partial class GRULayer<T> : LayerBase<T>
             throw new InvalidOperationException("GPU backend unavailable.");
 
         var input = inputs[0];
-        var shape = input.Shape.ToArray();
+        var shape = input._shape;
         int rank = shape.Length;
 
         // Determine sequence length, batch size from shape
@@ -1227,15 +1227,15 @@ public partial class GRULayer<T> : LayerBase<T>
 
             if (_WzVelocity == null)
             {
-                _WzVelocity = new Tensor<T>(_Wz.Shape.ToArray()); _WzVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_WzVelocity, PersistentTensorRole.OptimizerState);
-                _WrVelocity = new Tensor<T>(_Wr.Shape.ToArray()); _WrVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_WrVelocity, PersistentTensorRole.OptimizerState);
-                _WhVelocity = new Tensor<T>(_Wh.Shape.ToArray()); _WhVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_WhVelocity, PersistentTensorRole.OptimizerState);
-                _UzVelocity = new Tensor<T>(_Uz.Shape.ToArray()); _UzVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_UzVelocity, PersistentTensorRole.OptimizerState);
-                _UrVelocity = new Tensor<T>(_Ur.Shape.ToArray()); _UrVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_UrVelocity, PersistentTensorRole.OptimizerState);
-                _UhVelocity = new Tensor<T>(_Uh.Shape.ToArray()); _UhVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_UhVelocity, PersistentTensorRole.OptimizerState);
-                _bzVelocity = new Tensor<T>(_bz.Shape.ToArray()); _bzVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_bzVelocity, PersistentTensorRole.OptimizerState);
-                _brVelocity = new Tensor<T>(_br.Shape.ToArray()); _brVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_brVelocity, PersistentTensorRole.OptimizerState);
-                _bhVelocity = new Tensor<T>(_bh.Shape.ToArray()); _bhVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_bhVelocity, PersistentTensorRole.OptimizerState);
+                _WzVelocity = new Tensor<T>(_Wz._shape); _WzVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_WzVelocity, PersistentTensorRole.OptimizerState);
+                _WrVelocity = new Tensor<T>(_Wr._shape); _WrVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_WrVelocity, PersistentTensorRole.OptimizerState);
+                _WhVelocity = new Tensor<T>(_Wh._shape); _WhVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_WhVelocity, PersistentTensorRole.OptimizerState);
+                _UzVelocity = new Tensor<T>(_Uz._shape); _UzVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_UzVelocity, PersistentTensorRole.OptimizerState);
+                _UrVelocity = new Tensor<T>(_Ur._shape); _UrVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_UrVelocity, PersistentTensorRole.OptimizerState);
+                _UhVelocity = new Tensor<T>(_Uh._shape); _UhVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_UhVelocity, PersistentTensorRole.OptimizerState);
+                _bzVelocity = new Tensor<T>(_bz._shape); _bzVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_bzVelocity, PersistentTensorRole.OptimizerState);
+                _brVelocity = new Tensor<T>(_br._shape); _brVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_brVelocity, PersistentTensorRole.OptimizerState);
+                _bhVelocity = new Tensor<T>(_bh._shape); _bhVelocity.Fill(NumOps.Zero); gpuEngine.RegisterPersistentTensor(_bhVelocity, PersistentTensorRole.OptimizerState);
             }
 
             gpuEngine.SgdMomentumUpdateGpu(_Wz, _dWz, _WzVelocity!, lr, 0.0f, 0.0f);
@@ -1566,7 +1566,7 @@ public partial class GRULayer<T> : LayerBase<T>
     /// </summary>
     private Tensor<T> CreateOnesLike(Tensor<T> tensor)
     {
-        var ones = new Tensor<T>(tensor.Shape.ToArray());
+        var ones = new Tensor<T>(tensor._shape);
         ones.Fill(NumOps.One);
         return ones;
     }

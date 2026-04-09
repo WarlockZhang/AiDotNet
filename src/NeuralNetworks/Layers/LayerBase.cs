@@ -3375,7 +3375,7 @@ public abstract class LayerBase<T> : ILayer<T>, ITrainableLayer<T>, IDisposable
         }
 
         // Validate shape
-        var actualShape = value.Shape.ToArray();
+        var actualShape = value._shape;
         if (actualShape.Length != expectedShape.Length)
         {
             throw new ArgumentException(

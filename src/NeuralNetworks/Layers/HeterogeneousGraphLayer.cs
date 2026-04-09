@@ -308,7 +308,7 @@ public partial class HeterogeneousGraphLayer<T> : LayerBase<T>, IGraphConvolutio
     private void InitializeTensor(Tensor<T> tensor, T scale)
     {
         var randomTensor = Tensor<T>.CreateRandom(tensor.Shape.ToArray());
-        var halfTensor = new Tensor<T>(tensor.Shape.ToArray());
+        var halfTensor = new Tensor<T>(tensor._shape);
         halfTensor.Fill(NumOps.FromDouble(0.5));
         var shifted = Engine.TensorSubtract(randomTensor, halfTensor);
         var scaled = Engine.TensorMultiplyScalar(shifted, scale);
@@ -362,7 +362,7 @@ public partial class HeterogeneousGraphLayer<T> : LayerBase<T>, IGraphConvolutio
         }
 
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle any-rank tensor: normalize to 3D [batchSize, numNodes, features] for graph processing
@@ -535,7 +535,7 @@ public partial class HeterogeneousGraphLayer<T> : LayerBase<T>, IGraphConvolutio
         }
 
         var input = inputs[0];
-        int[] inputShape = input.Shape.ToArray();
+        int[] inputShape = input._shape;
 
         // Handle shape normalization
         int batchSize;
@@ -903,7 +903,7 @@ public partial class HeterogeneousGraphLayer<T> : LayerBase<T>, IGraphConvolutio
             adj3D = adjacency;
         }
 
-        var normalized = new Tensor<T>(adj3D.Shape.ToArray());
+        var normalized = new Tensor<T>(adj3D._shape);
 
         for (int b = 0; b < batchSize; b++)
         {

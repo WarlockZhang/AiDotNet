@@ -218,7 +218,7 @@ public partial class DeltaFormerLayer<T> : LayerBase<T>
     /// <inheritdoc />
     public override Tensor<T> Forward(Tensor<T> input)
     {
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
 
         int rank = input.Shape.Length;
         int seqLen = rank >= 2 ? input.Shape[rank - 2] : 1;
@@ -618,7 +618,7 @@ public partial class DeltaFormerLayer<T> : LayerBase<T>
 
     private Tensor<T> CreateOnesLike(Tensor<T> template)
     {
-        var ones = new Tensor<T>(template.Shape.ToArray());
+        var ones = new Tensor<T>(template._shape);
         ones.Fill(NumOps.One);
         return ones;
     }

@@ -99,7 +99,7 @@ public static class S6Scan<T>
         if (initialState != null)
         {
             // Clone initial state so we don't mutate the caller's tensor
-            h = new Tensor<T>(initialState.Shape.ToArray());
+            h = new Tensor<T>(initialState._shape);
             initialState.Data.Span.CopyTo(h.Data.Span);
         }
         else

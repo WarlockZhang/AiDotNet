@@ -776,7 +776,7 @@ public class SpyNetLayer<T> : LayerBase<T>
         int height = hasBatch ? image.Shape[2] : image.Shape[1];
         int width = hasBatch ? image.Shape[3] : image.Shape[2];
 
-        var output = TensorAllocator.Rent<T>(image.Shape.ToArray());
+        var output = TensorAllocator.Rent<T>(image._shape);
 
         for (int b = 0; b < batch; b++)
         {
@@ -923,7 +923,7 @@ public class SpyNetLayer<T> : LayerBase<T>
         int height = hasBatch ? flow.Shape[2] : flow.Shape[1];
         int width = hasBatch ? flow.Shape[3] : flow.Shape[2];
 
-        var output = TensorAllocator.Rent<T>(flow.Shape.ToArray());
+        var output = TensorAllocator.Rent<T>(flow._shape);
         int pixelsPerChannel = height * width;
 
         for (int b = 0; b < batch; b++)

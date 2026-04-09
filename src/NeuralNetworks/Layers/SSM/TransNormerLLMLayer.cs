@@ -324,7 +324,7 @@ public partial class TransNormerLLMLayer<T> : LayerBase<T>
     /// <inheritdoc />
     public override Tensor<T> Forward(Tensor<T> input)
     {
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
 
         int rank = input.Shape.Length;
         int seqLen = rank >= 2 ? input.Shape[rank - 2] : 1;
@@ -483,7 +483,7 @@ public partial class TransNormerLLMLayer<T> : LayerBase<T>
         Tensor<T> dOutput, Tensor<T> input, Tensor<T> scale, Tensor<T> rmsInv,
         Tensor<T> scaleGradient, int batchSize, int seqLen)
     {
-        var dInput = TensorAllocator.Rent<T>(input.Shape.ToArray());
+        var dInput = TensorAllocator.Rent<T>(input._shape);
 
         for (int bi = 0; bi < batchSize; bi++)
         {

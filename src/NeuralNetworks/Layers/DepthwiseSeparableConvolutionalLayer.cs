@@ -765,7 +765,7 @@ public partial class DepthwiseSeparableConvolutionalLayer<T> : LayerBase<T>
     public override Tensor<T> Forward(Tensor<T> input)
     {
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle any-rank tensor: input is in CHW/NCHW format [C, H, W] or [B, C, H, W]
@@ -901,7 +901,7 @@ public partial class DepthwiseSeparableConvolutionalLayer<T> : LayerBase<T>
                 $"DepthwiseSeparableConv2D input requires at least 3D tensor [C, H, W]. Got rank {input.Shape.Length}.");
         }
 
-        var originalInputShape = input.Shape.ToArray();
+        var originalInputShape = input._shape;
         int rank = input.Shape.Length;
         bool addedBatchDimension = false;
 

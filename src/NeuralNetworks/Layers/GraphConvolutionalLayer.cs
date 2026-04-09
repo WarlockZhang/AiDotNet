@@ -469,7 +469,7 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         var randomTensor = Tensor<T>.CreateRandom(tensor.Shape.ToArray());
 
         // Shift to [-0.5, 0.5] range: randomTensor - 0.5
-        var halfTensor = new Tensor<T>(tensor.Shape.ToArray());
+        var halfTensor = new Tensor<T>(tensor._shape);
         halfTensor.Fill(NumOps.FromDouble(0.5));
         var shifted = Engine.TensorSubtract(randomTensor, halfTensor);
 
@@ -651,7 +651,7 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         }
 
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle any-rank tensor: collapse leading dims for rank > 3
@@ -828,7 +828,7 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         var input = inputs[0];
 
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Determine batch size and reshape if needed
@@ -1086,13 +1086,13 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
 
             if (_weightsVelocity == null)
             {
-                _weightsVelocity = new Tensor<T>(_weights.Shape.ToArray());
+                _weightsVelocity = new Tensor<T>(_weights._shape);
                 _weightsVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_weightsVelocity, PersistentTensorRole.OptimizerState);
             }
             if (_biasVelocity == null)
             {
-                _biasVelocity = new Tensor<T>(_bias.Shape.ToArray());
+                _biasVelocity = new Tensor<T>(_bias._shape);
                 _biasVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_biasVelocity, PersistentTensorRole.OptimizerState);
             }

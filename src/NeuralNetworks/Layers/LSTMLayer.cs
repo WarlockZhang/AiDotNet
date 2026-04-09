@@ -993,7 +993,7 @@ public partial class LSTMLayer<T> : LayerBase<T>
         var randomTensor = Tensor<T>.CreateRandom(weight.Shape[0], weight.Shape[1]);
 
         // Shift to [-0.5, 0.5] range: random - 0.5
-        var halfTensor = new Tensor<T>(weight.Shape.ToArray());
+        var halfTensor = new Tensor<T>(weight._shape);
         halfTensor.Fill(NumOps.FromDouble(0.5));
         var shifted = Engine.TensorSubtract(randomTensor, halfTensor);
 
@@ -1058,7 +1058,7 @@ public partial class LSTMLayer<T> : LayerBase<T>
     public override Tensor<T> Forward(Tensor<T> input)
     {
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle any-rank tensor: collapse leading dims into batch for rank > 3
@@ -1232,7 +1232,7 @@ public partial class LSTMLayer<T> : LayerBase<T>
             batchSize = 1;
             timeSteps = input.Shape[0];
             reshaped2D = true;
-            originalShape = input.Shape.ToArray();
+            originalShape = input._shape;
         }
         else if (rank == 3)
         {
@@ -1243,7 +1243,7 @@ public partial class LSTMLayer<T> : LayerBase<T>
         else
         {
             // Higher-rank tensor: collapse leading dims into batch
-            originalShape = input.Shape.ToArray();
+            originalShape = input._shape;
             reshapedHigherRank = true;
             timeSteps = input.Shape[rank - 2];
             batchSize = 1;
@@ -1994,7 +1994,7 @@ public partial class LSTMLayer<T> : LayerBase<T>
 
                 if (!_velocities.TryGetValue(paramName, out var velocity))
                 {
-                    velocity = new Tensor<T>(param.Shape.ToArray());
+                    velocity = new Tensor<T>(param._shape);
                     velocity.Fill(NumOps.Zero);
                     var gpu1 = gpuEngine ?? throw new InvalidOperationException("GPU engine is not available.");
                     gpu1.RegisterPersistentTensor(velocity, PersistentTensorRole.OptimizerState);

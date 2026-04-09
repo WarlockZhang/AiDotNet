@@ -405,7 +405,7 @@ public partial class MessagePassingLayer<T> : LayerBase<T>, IGraphConvolutionLay
         var randomTensor = Tensor<T>.CreateRandom(tensor.Shape.ToArray());
 
         // Shift to [-0.5, 0.5] range: randomTensor - 0.5
-        var halfTensor = new Tensor<T>(tensor.Shape.ToArray());
+        var halfTensor = new Tensor<T>(tensor._shape);
         halfTensor.Fill(NumOps.FromDouble(0.5));
         var shifted = Engine.TensorSubtract(randomTensor, halfTensor);
 
@@ -525,7 +525,7 @@ public partial class MessagePassingLayer<T> : LayerBase<T>, IGraphConvolutionLay
         }
 
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle any-rank tensor: need at least 2D for [nodes, features] or 3D for [batch, nodes, features]
@@ -928,7 +928,7 @@ public partial class MessagePassingLayer<T> : LayerBase<T>, IGraphConvolutionLay
                 array[i] = parameters[index++];
             }
 
-            var newTensor = new Tensor<T>(tensor.Shape.ToArray());
+            var newTensor = new Tensor<T>(tensor._shape);
             for (int i = 0; i < array.Length; i++)
             {
                 newTensor[i] = array[i];

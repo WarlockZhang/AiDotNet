@@ -562,7 +562,7 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
     public override Tensor<T> Forward(Tensor<T> input)
     {
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle any-rank tensor: collapse leading dims for rank > 5
@@ -682,7 +682,7 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
             throw new InvalidOperationException("GPU backend unavailable.");
 
         var input = inputs[0];
-        var shape = input.Shape.ToArray();
+        var shape = input._shape;
         int rank = shape.Length;
 
         // Support any rank >= 4: last 4 dims are [T, H, W, C], earlier dims are batch-like
@@ -1183,7 +1183,7 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
         // Apply gate activation derivatives:
         // f, i, o use sigmoid: sigmoid'(x) = sigmoid(x) * (1 - sigmoid(x))
         // candidate uses tanh: tanh'(x) = 1 - tanh(x)^2
-        var ones = new Tensor<T>(f.Shape.ToArray());
+        var ones = new Tensor<T>(f._shape);
         ones.Fill(NumOps.One);
 
         var df = Engine.TensorMultiply(df_raw, Engine.TensorMultiply(f, Engine.TensorSubtract(ones, f)));
@@ -1225,7 +1225,7 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
         var dbo = do_.Sum([0, 1, 2]).Reshape(_biasO.Shape.ToArray());
 
         // Input gradient: dxt = Conv2DBackwardInput(gradient, kernel, inputShape, stride, padding, dilation)
-        var inputNCHWShape = xtNCHW.Shape.ToArray();
+        var inputNCHWShape = xtNCHW._shape;
         var wFiNCHW = _weightsFi.Transpose([3, 2, 0, 1]);
         var wIiNCHW = _weightsIi.Transpose([3, 2, 0, 1]);
         var wCiNCHW = _weightsCi.Transpose([3, 2, 0, 1]);
@@ -1236,7 +1236,7 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
             .Add(Engine.Conv2DBackwardInput(doNCHW, wOiNCHW, inputNCHWShape, stride, padding, dilation));
         var dxt = dxtNCHW.Transpose([0, 2, 3, 1]); // NCHW → NHWC
 
-        var prevHNCHWShape = prevHNCHW.Shape.ToArray();
+        var prevHNCHWShape = prevHNCHW._shape;
         var wFhNCHW = _weightsFh.Transpose([3, 2, 0, 1]);
         var wIhNCHW = _weightsIh.Transpose([3, 2, 0, 1]);
         var wChNCHW = _weightsCh.Transpose([3, 2, 0, 1]);
@@ -1482,7 +1482,7 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
 
         if (!_momentums.TryGetValue(paramName, out var momentum))
         {
-            momentum = new Tensor<T>(parameter.Shape.ToArray());
+            momentum = new Tensor<T>(parameter._shape);
             // Initialize to zero (new Tensor does this)
         }
 
