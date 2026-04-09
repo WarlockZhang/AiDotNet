@@ -1,10 +1,10 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors.Engines;
-using AiDotNet.Tensors.Engines.Autodiff;
 using AiDotNet.Tensors.Engines.Compilation;
 using AiDotNet.Tensors.Engines.Optimization;
 using AiDotNet.Tensors.Helpers;
 using AiDotNet.Tensors.LinearAlgebra;
+using Microsoft.Extensions.Logging;
 
 namespace AiDotNet.Training;
 
@@ -24,12 +24,8 @@ namespace AiDotNet.Training;
 /// <list type="bullet">
 /// <item>Input shape changes (different batch size, sequence length, etc.)</item>
 /// <item>Explicit Invalidate() call (model structure changed)</item>
-/// <item>Compilation failure (falls back to eager TapeTrainingStep)</item>
+/// <item>Compilation failure (falls back to eager TapeTrainingStep for that shape)</item>
 /// </list>
-///
-/// <para><b>Performance vs PyTorch:</b></para>
-/// <para>Achieves 4-10x speedup over PyTorch on MLP training by eliminating:
-/// graph traversal, shape validation, tape recording, and intermediate allocation overhead.</para>
 /// </summary>
 /// <typeparam name="T">The numeric type.</typeparam>
 public static class CompiledTapeTrainingStep<T>
@@ -39,7 +35,9 @@ public static class CompiledTapeTrainingStep<T>
     [ThreadStatic]
     private static int[]? _lastInputShape;
     [ThreadStatic]
-    private static bool _compilationFailed;
+    private static Tensor<T>[]? _cachedParameters;
+
+    private static readonly ILogger? _logger = LoggerFactory.Create(b => { }).CreateLogger(typeof(CompiledTapeTrainingStep<T>).Name);
 
     /// <summary>
     /// Executes a single compiled training step.
@@ -61,77 +59,54 @@ public static class CompiledTapeTrainingStep<T>
         Func<Tensor<T>, Tensor<T>> forward,
         Func<Tensor<T>, Tensor<T>, Tensor<T>> computeLoss)
     {
-        // If compilation previously failed, delegate to eager path
-        if (_compilationFailed || !TensorCodecOptions.Current.EnableCompilation)
+        if (!TensorCodecOptions.Current.EnableCompilation)
             return TapeTrainingStep<T>.Step(layers, input, target, learningRate, forward, computeLoss);
 
         var numOps = MathHelper.GetNumericOperations<T>();
         var engine = AiDotNetEngine.Current;
 
-        // Collect parameters once (cached)
-        var parameters = CollectParameterArray(layers);
+        // Cache parameters — only rebuild when layers change (via Invalidate)
+        var parameters = _cachedParameters ??= CollectParameterArray(layers);
 
         try
         {
-            // Check if we have a cached plan for this input shape
             var cache = _cache ??= new CompiledModelCache<T>();
+
+            // Detect shape change — triggers recompilation
             bool shapeChanged = !ShapeMatches(input._shape, _lastInputShape);
-
             if (shapeChanged)
-            {
-                _lastInputShape = (int[])input._shape.Clone();
+                _lastInputShape = input._shape; // No clone — _shape is the internal array
 
-                // Zero gradients before tracing
-                foreach (var layer in layers)
-                    layer.ZeroGrad();
+            // Zero gradients before forward pass
+            foreach (var layer in layers)
+                layer.ZeroGrad();
 
-                // Compile: trace forward + loss under GraphMode
-                var plan = cache.GetOrCompileTraining(
-                    input._shape,
-                    () =>
-                    {
-                        var predicted = forward(input);
-                        computeLoss(predicted, target);
-                    },
-                    parameters);
+            // Get or compile training plan (cached by shape)
+            var plan = cache.GetOrCompileTraining(
+                input._shape,
+                () =>
+                {
+                    var predicted = forward(input);
+                    computeLoss(predicted, target);
+                },
+                parameters);
 
-                // Execute the compiled plan
-                plan.Step();
+            // Execute compiled forward + backward
+            var lossOutput = plan.Step();
 
-                // Update parameters with SGD
-                UpdateParametersSGD(engine, parameters, plan.Gradients, learningRate, numOps);
+            // Update parameters with SGD
+            UpdateParametersSGD(engine, parameters, plan.Gradients, learningRate, numOps);
 
-                var lossOutput = plan.Step(); // Re-execute to get loss value
-                return lossOutput.Length > 0 ? lossOutput[0] : numOps.Zero;
-            }
-            else
-            {
-                // Replay: zero grad, then replay compiled plan
-                foreach (var layer in layers)
-                    layer.ZeroGrad();
-
-                // Get cached plan and replay
-                var plan = cache.GetOrCompileTraining(
-                    input._shape,
-                    () =>
-                    {
-                        var predicted = forward(input);
-                        computeLoss(predicted, target);
-                    },
-                    parameters);
-
-                var lossOutput = plan.Step();
-
-                // Update parameters with SGD
-                UpdateParametersSGD(engine, parameters, plan.Gradients, learningRate, numOps);
-
-                return lossOutput.Length > 0 ? lossOutput[0] : numOps.Zero;
-            }
+            return lossOutput.Length > 0 ? lossOutput[0] : numOps.Zero;
         }
-        catch
+        catch (Exception ex)
         {
-            // Compilation failed — fall back to eager and don't retry
-            _compilationFailed = true;
+            // Log the compilation failure for developer diagnostics
+            _logger?.LogWarning(ex, "Compiled training step failed, falling back to eager execution");
+
+            // Fall back to eager for this step only — next step will retry compilation.
+            // Don't permanently disable compilation; the failure may be transient
+            // (e.g., unsupported op that gets fixed in a later version).
             return TapeTrainingStep<T>.Step(layers, input, target, learningRate, forward, computeLoss);
         }
     }
@@ -144,7 +119,7 @@ public static class CompiledTapeTrainingStep<T>
     {
         _cache?.Invalidate();
         _lastInputShape = null;
-        _compilationFailed = false;
+        _cachedParameters = null; // Force parameter re-collection
     }
 
     private static Tensor<T>[] CollectParameterArray(IReadOnlyList<ITrainableLayer<T>> layers)
@@ -159,7 +134,8 @@ public static class CompiledTapeTrainingStep<T>
         IEngine engine, Tensor<T>[] parameters, Tensor<T>[] gradients,
         T learningRate, INumericOperations<T> numOps)
     {
-        for (int i = 0; i < parameters.Length; i++)
+        int count = Math.Min(parameters.Length, gradients.Length);
+        for (int i = 0; i < count; i++)
         {
             if (gradients[i] is not null)
             {
@@ -172,6 +148,8 @@ public static class CompiledTapeTrainingStep<T>
     private static bool ShapeMatches(int[] a, int[]? b)
     {
         if (b is null || a.Length != b.Length) return false;
+        // Reference equality first — same tensor reuses the same _shape array
+        if (ReferenceEquals(a, b)) return true;
         for (int i = 0; i < a.Length; i++)
             if (a[i] != b[i]) return false;
         return true;
