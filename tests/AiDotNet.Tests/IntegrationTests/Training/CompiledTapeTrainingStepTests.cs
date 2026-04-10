@@ -169,11 +169,7 @@ public class CompiledTapeTrainingStepTests
             var srcParams = src[i].GetTrainableParameters();
             var dstParams = dst[i].GetTrainableParameters();
             for (int j = 0; j < srcParams.Count; j++)
-            {
-                var srcSpan = srcParams[j].AsSpan();
-                for (int k = 0; k < srcSpan.Length; k++)
-                    dstParams[j][k] = srcSpan[k];
-            }
+                srcParams[j].AsSpan().CopyTo(dstParams[j].Data.Span);
         }
     }
 
