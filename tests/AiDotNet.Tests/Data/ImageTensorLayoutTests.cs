@@ -8,7 +8,7 @@ namespace AiDotNetTests.Data;
 
 /// <summary>
 /// Tests for the ImageTensorLayout option on vision data loaders.
-/// Uses AutoDownload=false; logs a skip message when MNIST isn't cached.
+/// Uses AutoDownload=false; logs explicit SKIP when data isn't cached.
 /// </summary>
 public class ImageTensorLayoutTests
 {
@@ -21,7 +21,7 @@ public class ImageTensorLayoutTests
         string cachePath = DatasetDownloader.GetDefaultDataPath("mnist");
         if (File.Exists(Path.Combine(cachePath, "train-images-idx3-ubyte")))
             return true;
-        _output.WriteLine("SKIPPED: MNIST not cached locally. Run with AutoDownload=true once to populate.");
+        _output.WriteLine("SKIPPED: MNIST not cached. Run once with AutoDownload=true to populate.");
         return false;
     }
 
@@ -76,15 +76,16 @@ public class ImageTensorLayoutTests
     private bool RequireCifar10Cache()
     {
         string cachePath = DatasetDownloader.GetDefaultDataPath("cifar-10");
-        bool exists = Directory.Exists(cachePath) &&
-            Directory.GetFiles(cachePath, "data_batch*").Length > 0;
+        string batchesDir = Path.Combine(cachePath, "cifar-10-batches-bin");
+        bool exists = (Directory.Exists(cachePath) && Directory.GetFiles(cachePath, "data_batch*").Length > 0)
+            || (Directory.Exists(batchesDir) && Directory.GetFiles(batchesDir, "data_batch*").Length > 0);
         if (!exists)
             _output.WriteLine("SKIPPED: CIFAR-10 not cached locally.");
         return exists;
     }
 
     [Fact]
-    public async Task Cifar10NCHW_Shape_Is_B3_32_32()
+    public async Task Cifar10NCHW_ShapeAndChannelOrder()
     {
         if (!RequireCifar10Cache()) return;
         var loader = new Cifar10DataLoader<float>(new Cifar10DataLoaderOptions
@@ -92,6 +93,7 @@ public class ImageTensorLayoutTests
             Split = DatasetSplit.Train,
             AutoDownload = false,
             MaxSamples = 2,
+            Normalize = false,
             Layout = ImageTensorLayout.NCHW,
         });
         await loader.LoadAsync();

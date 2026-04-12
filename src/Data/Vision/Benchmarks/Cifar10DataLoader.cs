@@ -94,6 +94,7 @@ public class Cifar10DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Tens
         var featuresData = new T[totalSamples * pixelsPerImage];
         var labelsData = new T[totalSamples * 10];
 
+        bool nchw = _options.Layout == ImageTensorLayout.NCHW;
         for (int i = 0; i < totalSamples; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -102,7 +103,6 @@ public class Cifar10DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Tens
             int label = sample[0];
 
             int featureOffset = i * pixelsPerImage;
-            bool nchw = _options.Layout == ImageTensorLayout.NCHW;
             for (int h = 0; h < 32; h++)
             {
                 for (int w = 0; w < 32; w++)
