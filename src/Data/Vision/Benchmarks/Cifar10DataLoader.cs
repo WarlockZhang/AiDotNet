@@ -124,7 +124,7 @@ public class Cifar10DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Tens
                 labelsData[i * 10 + label] = NumOps.One;
         }
 
-        int[] shape = _options.Layout == ImageTensorLayout.NCHW
+        int[] shape = nchw
             ? new[] { totalSamples, 3, 32, 32 }
             : new[] { totalSamples, 32, 32, 3 };
         LoadedFeatures = new Tensor<T>(featuresData, shape);

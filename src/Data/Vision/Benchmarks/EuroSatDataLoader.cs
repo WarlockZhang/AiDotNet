@@ -121,26 +121,30 @@ public class EuroSatDataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Tens
             var pixels = VisionLoaderHelper.LoadAndResizeImage<T>(imgPath, ImageSize, ImageSize, 3, _options.Normalize);
 
             int featureOffset = i * pixelsPerImage;
-            if (_options.Layout == ImageTensorLayout.NCHW)
+            bool nchw = _options.Layout == ImageTensorLayout.NCHW;
+            int available = Math.Min(pixels.Length, pixelsPerImage);
+            if (nchw)
             {
                 // VisionLoaderHelper returns HWC; remap to CHW
-                for (int y = 0; y < ImageSize; y++)
-                    for (int x = 0; x < ImageSize; x++)
+                int h = ImageSize, w = ImageSize;
+                int maxY = Math.Min(h, available / (w * 3));
+                for (int y = 0; y < maxY; y++)
+                    for (int x = 0; x < w; x++)
                         for (int c = 0; c < 3; c++)
-                            featuresData[featureOffset + c * ImageSize * ImageSize + y * ImageSize + x]
-                                = pixels[(y * ImageSize + x) * 3 + c];
+                            featuresData[featureOffset + c * h * w + y * w + x]
+                                = pixels[(y * w + x) * 3 + c];
             }
             else
             {
-                int copyLen = Math.Min(pixels.Length, pixelsPerImage);
-                Array.Copy(pixels, 0, featuresData, featureOffset, copyLen);
+                Array.Copy(pixels, 0, featuresData, featureOffset, available);
             }
 
             if (label >= 0 && label < NumClasses)
                 labelsData[i * NumClasses + label] = NumOps.One;
         }
 
-        int[] shape = _options.Layout == ImageTensorLayout.NCHW
+        bool nchwLayout = _options.Layout == ImageTensorLayout.NCHW;
+        int[] shape = nchwLayout
             ? new[] { totalSamples, 3, ImageSize, ImageSize }
             : new[] { totalSamples, ImageSize, ImageSize, 3 };
         LoadedFeatures = new Tensor<T>(featuresData, shape);
