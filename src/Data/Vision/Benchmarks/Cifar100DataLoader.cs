@@ -89,22 +89,17 @@ public class Cifar100DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Ten
             int label = _options.UseFineLabels ? data[sampleOffset + 1] : data[sampleOffset];
 
             int featureOffset = i * 32 * 32 * 3;
-            for (int h = 0; h < 32; h++)
-            {
-                for (int w = 0; w < 32; w++)
-                {
-                    for (int c = 0; c < 3; c++)
-                    {
-                        int srcIdx = sampleOffset + 2 + c * 1024 + h * 32 + w;
-                        int dstIdx = nchw
-                            ? featureOffset + c * 1024 + h * 32 + w
-                            : featureOffset + (h * 32 + w) * 3 + c;
-                        double value = data[srcIdx];
-                        if (_options.Normalize) value /= 255.0;
-                        featuresData[dstIdx] = NumOps.FromDouble(value);
-                    }
-                }
-            }
+            int pixelStart = sampleOffset + 2;
+            const int ppi = 32 * 32 * 3;
+            var sampleTensor = new Tensor<T>([3, 32, 32]);
+            double scale = _options.Normalize ? 1.0 / 255.0 : 1.0;
+            for (int p = 0; p < ppi; p++)
+                sampleTensor[p] = NumOps.FromDouble(data[pixelStart + p] * scale);
+
+            if (!nchw)
+                sampleTensor = AiDotNetEngine.Current.TensorPermute(sampleTensor, [1, 2, 0]);
+
+            sampleTensor.AsSpan().CopyTo(featuresData.AsSpan(featureOffset, ppi));
 
             if (label >= 0 && label < _numClasses)
                 labelsData[i * _numClasses + label] = NumOps.One;

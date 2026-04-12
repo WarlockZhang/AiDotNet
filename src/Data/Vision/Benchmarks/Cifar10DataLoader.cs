@@ -103,22 +103,16 @@ public class Cifar10DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Tens
             int label = sample[0];
 
             int featureOffset = i * pixelsPerImage;
-            for (int h = 0; h < 32; h++)
-            {
-                for (int w = 0; w < 32; w++)
-                {
-                    for (int c = 0; c < 3; c++)
-                    {
-                        int srcIdx = 1 + c * 1024 + h * 32 + w; // CHW in source
-                        int dstIdx = nchw
-                            ? featureOffset + c * 1024 + h * 32 + w  // NCHW
-                            : featureOffset + (h * 32 + w) * 3 + c;  // NHWC
-                        double value = sample[srcIdx];
-                        if (_options.Normalize) value /= 255.0;
-                        featuresData[dstIdx] = NumOps.FromDouble(value);
-                    }
-                }
-            }
+            // Build CHW tensor from raw bytes, permute to HWC if needed
+            var sampleTensor = new Tensor<T>([3, 32, 32]);
+            double scale = _options.Normalize ? 1.0 / 255.0 : 1.0;
+            for (int p = 0; p < pixelsPerImage; p++)
+                sampleTensor[p] = NumOps.FromDouble(sample[1 + p] * scale);
+
+            if (!nchw)
+                sampleTensor = AiDotNetEngine.Current.TensorPermute(sampleTensor, [1, 2, 0]);
+
+            sampleTensor.AsSpan().CopyTo(featuresData.AsSpan(featureOffset, pixelsPerImage));
 
             if (label >= 0 && label < 10)
                 labelsData[i * 10 + label] = NumOps.One;
