@@ -28,8 +28,9 @@ public sealed class MnistDataLoaderOptions
     public bool Normalize { get; set; } = true;
 
     /// <summary>
-    /// Whether to flatten images to 1D vectors (784) instead of 2D (28x28). Default is false.
-    /// When true, the <see cref="Layout"/> option is ignored.
+    /// Whether to flatten images to 1D vectors (784) instead of the spatial layout
+    /// (<c>[B, 28, 28, 1]</c> NHWC or <c>[B, 1, 28, 28]</c> NCHW). Default is false.
+    /// When true, <see cref="Layout"/> is ignored.
     /// </summary>
     public bool Flatten { get; set; }
 
