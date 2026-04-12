@@ -13,7 +13,7 @@ public enum ImageTensorLayout
 
     /// <summary>
     /// Channel-first layout: <c>[B, C, H, W]</c>. PyTorch convention.
-    /// Used by <c>ConvolutionalLayer&lt;T&gt;</c> and all HRE vision layers.
+    /// Used by <c>ConvolutionalLayer&lt;T&gt;</c> and other channel-first models.
     /// </summary>
     NCHW,
 }
