@@ -579,7 +579,7 @@ public partial class SubpixelConvolutionalLayer<T> : LayerBase<T>
     /// </remarks>
     public override Tensor<T> Forward(Tensor<T> input)
     {
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Support any rank >= 3: last 3 dims are interpreted as [C, H, W]
@@ -674,7 +674,7 @@ public partial class SubpixelConvolutionalLayer<T> : LayerBase<T>
             throw new InvalidOperationException("ForwardGpu requires a DirectGpuTensorEngine.");
 
         var input = inputs[0];
-        var shape = input.Shape.ToArray();
+        var shape = input._shape;
 
         // Ensure 4D [B, C, H, W] format
         Tensor<T> input4D;
@@ -787,7 +787,7 @@ public partial class SubpixelConvolutionalLayer<T> : LayerBase<T>
         else
         {
             var scalarAct = ScalarActivation ?? throw new InvalidOperationException("ScalarActivation has not been initialized.");
-            var result = TensorAllocator.Rent<T>(outputGradient.Shape.ToArray());
+            var result = TensorAllocator.Rent<T>(outputGradient._shape);
             for (int i = 0; i < outputGradient.Length; i++)
             {
                 result[i] = NumOps.Multiply(scalarAct.Derivative(lastOutput[i]), outputGradient[i]);
@@ -893,7 +893,7 @@ public partial class SubpixelConvolutionalLayer<T> : LayerBase<T>
 
         // Initialize momentum if not already done
         int numOutChannels = _outputDepth * _upscaleFactor * _upscaleFactor;
-        _kernelMomentum ??= new Tensor<T>(_kernels.Shape.ToArray());
+        _kernelMomentum ??= new Tensor<T>(_kernels._shape);
         _biasMomentum ??= new Tensor<T>([numOutChannels]);
 
         T oneMinusMomentum = NumOps.Subtract(NumOps.One, _momentumFactor);

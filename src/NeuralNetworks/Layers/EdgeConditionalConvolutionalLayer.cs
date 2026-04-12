@@ -207,7 +207,7 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
         var randomTensor = Tensor<T>.CreateRandom(tensor.Shape.ToArray());
 
         // Shift to [-0.5, 0.5] range: randomTensor - 0.5
-        var halfTensor = new Tensor<T>(tensor.Shape.ToArray());
+        var halfTensor = new Tensor<T>(tensor._shape);
         halfTensor.Fill(NumOps.FromDouble(0.5));
         var shifted = Engine.TensorSubtract(randomTensor, halfTensor);
 
@@ -258,7 +258,7 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
         }
 
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Graph layer expects 3D: [batchSize, numNodes, features]
@@ -442,7 +442,7 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
         var input = inputs[0];
 
         // Get input dimensions - expect [batchSize, numNodes, inputFeatures]
-        int[] inputShape = input.Shape.ToArray();
+        int[] inputShape = input._shape;
         int batchSize = inputShape.Length >= 3 ? inputShape[0] : 1;
         int numNodes = inputShape.Length >= 3 ? inputShape[1] : inputShape[0];
         int inputFeatures = inputShape.Length >= 3 ? inputShape[2] : inputShape[1];
@@ -711,7 +711,7 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
             adj3D = adjacency;
         }
 
-        var normalized = new Tensor<T>(adj3D.Shape.ToArray());
+        var normalized = new Tensor<T>(adj3D._shape);
         for (int b = 0; b < batchSize; b++)
         {
             for (int i = 0; i < numNodes; i++)
@@ -807,7 +807,7 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
     /// </summary>
     private Tensor<T> ApplyReLU(Tensor<T> input)
     {
-        var output = TensorAllocator.Rent<T>(input.Shape.ToArray());
+        var output = TensorAllocator.Rent<T>(input._shape);
         for (int i = 0; i < input.Length; i++)
         {
             T val = input.GetFlat(i);

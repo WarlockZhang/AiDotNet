@@ -364,7 +364,7 @@ public partial class DigitCapsuleLayer<T> : LayerBase<T>
     public override Tensor<T> Forward(Tensor<T> input)
     {
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle any-rank tensor: collapse to 3D [B, I, D_in] for capsule processing
@@ -531,7 +531,7 @@ public partial class DigitCapsuleLayer<T> : LayerBase<T>
             throw new InvalidOperationException("GPU backend unavailable.");
 
         var input = inputs[0];
-        var inputShape = input.Shape.ToArray();
+        var inputShape = input._shape;
         int rank = inputShape.Length;
 
         // Determine batch size and reshape to [B, I, D_in] for capsule processing
@@ -750,7 +750,7 @@ public partial class DigitCapsuleLayer<T> : LayerBase<T>
         }
 
         // Write parameters directly into a new mutable tensor
-        _weights = new Tensor<T>(_weights.Shape.ToArray());
+        _weights = new Tensor<T>(_weights._shape);
         for (int i = 0; i < parameters.Length; i++)
             _weights[i] = parameters[i];
     }

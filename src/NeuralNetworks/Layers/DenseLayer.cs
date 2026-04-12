@@ -785,7 +785,7 @@ public partial class DenseLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         EnsureInitialized();
 
         _lastInput = input;
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
 
         // Industry standard: Support any-rank input tensors [..., inputSize]
         // Transformation is applied to the last dimension
@@ -905,7 +905,7 @@ public partial class DenseLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         var input = inputs[0];
 
         // Store for potential backward pass
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
 
         int actualInputSize = input.Shape[^1]; // Last dimension is always features
         int expectedInputSize = _weights.Shape[0];
@@ -1134,13 +1134,13 @@ public partial class DenseLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
             // Initialize velocity tensors if needed (lazily)
             if (_weightsVelocity == null)
             {
-                _weightsVelocity = new Tensor<T>(_weights.Shape.ToArray());
+                _weightsVelocity = new Tensor<T>(_weights._shape);
                 _weightsVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_weightsVelocity, PersistentTensorRole.OptimizerState);
             }
             if (_biasesVelocity == null)
             {
-                _biasesVelocity = new Tensor<T>(_biases.Shape.ToArray());
+                _biasesVelocity = new Tensor<T>(_biases._shape);
                 _biasesVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_biasesVelocity, PersistentTensorRole.OptimizerState);
             }

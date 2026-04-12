@@ -341,7 +341,7 @@ public class ResidualDenseBlock<T> : LayerBase<T>
             throw new InvalidOperationException("GPU backend unavailable.");
 
         var input = inputs[0];
-        var originalShape = input.Shape.ToArray();
+        var originalShape = input._shape;
 
         // Support any rank >= 3: last 3 dims are [C, H, W], earlier dims are batch-like
         if (originalShape.Length < 3)
@@ -632,7 +632,7 @@ public class ResidualDenseBlock<T> : LayerBase<T>
     /// </summary>
     private Tensor<T> ApplyLeakyReLU(Tensor<T> input)
     {
-        var output = TensorAllocator.Rent<T>(input.Shape.ToArray());
+        var output = TensorAllocator.Rent<T>(input._shape);
         for (int i = 0; i < input.Length; i++)
         {
             output.Data.Span[i] = _activation.Activate(input.Data.Span[i]);
@@ -645,7 +645,7 @@ public class ResidualDenseBlock<T> : LayerBase<T>
     /// </summary>
     private Tensor<T> BackwardActivation(Tensor<T> activationOutput, Tensor<T> gradient)
     {
-        var output = TensorAllocator.Rent<T>(gradient.Shape.ToArray());
+        var output = TensorAllocator.Rent<T>(gradient._shape);
         for (int i = 0; i < gradient.Length; i++)
         {
             output.Data.Span[i] = NumOps.Multiply(

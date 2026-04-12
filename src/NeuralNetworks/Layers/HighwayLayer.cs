@@ -658,7 +658,7 @@ public partial class HighwayLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
             _gpuGateOutput = gateOutput;
             _gpuTransformPreActivation = transformPreActivation;
             _gpuGatePreActivation = gatePreActivation;
-            _gpuInputShape = input.Shape.ToArray();
+            _gpuInputShape = input._shape;
 
             // Also cache CPU tensors for CPU backward compatibility
             _lastInput = input;

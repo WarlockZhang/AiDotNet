@@ -318,7 +318,7 @@ public partial class DirectionalGraphLayer<T> : LayerBase<T>, IGraphConvolutionL
         var randomTensor = Tensor<T>.CreateRandom(tensor.Shape.ToArray());
 
         // Shift to [-0.5, 0.5] range: randomTensor - 0.5
-        var halfTensor = new Tensor<T>(tensor.Shape.ToArray());
+        var halfTensor = new Tensor<T>(tensor._shape);
         halfTensor.Fill(NumOps.FromDouble(0.5));
         var shifted = Engine.TensorSubtract(randomTensor, halfTensor);
 
@@ -378,7 +378,7 @@ public partial class DirectionalGraphLayer<T> : LayerBase<T>, IGraphConvolutionL
         }
 
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Handle any-rank tensor: collapse leading dims for rank > 3
@@ -535,7 +535,7 @@ public partial class DirectionalGraphLayer<T> : LayerBase<T>, IGraphConvolutionL
         var input = inputs[0];
 
         // Handle batch dimension
-        int[] inputShape = input.Shape.ToArray();
+        int[] inputShape = input._shape;
         int batchSize;
         int numNodes;
         int inputFeatures;
@@ -946,7 +946,7 @@ public partial class DirectionalGraphLayer<T> : LayerBase<T>, IGraphConvolutionL
     /// </summary>
     private Tensor<T> ApplyGatesToFeatures(Tensor<T> combined, Tensor<T> gates, int batchSize, int numNodes, int outputFeatures)
     {
-        var gated = new Tensor<T>(combined.Shape.ToArray());
+        var gated = new Tensor<T>(combined._shape);
 
         for (int b = 0; b < batchSize; b++)
         {
@@ -983,7 +983,7 @@ public partial class DirectionalGraphLayer<T> : LayerBase<T>, IGraphConvolutionL
         _gateBiasGradient = new Tensor<T>([3]);
         _gateBiasGradient.Fill(NumOps.Zero);
 
-        var combinedGradient = new Tensor<T>(_lastCombined.Shape.ToArray());
+        var combinedGradient = new Tensor<T>(_lastCombined._shape);
         var gatesGradient = TensorAllocator.Rent<T>([batchSize, numNodes, 3]);
 
         // Gradient through element-wise multiplication: gated = combined * gates

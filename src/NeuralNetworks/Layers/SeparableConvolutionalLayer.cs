@@ -711,9 +711,9 @@ public partial class SeparableConvolutionalLayer<T> : LayerBase<T>
 
         // Initialize velocity tensors if they don't exist
         if (_depthwiseKernelsVelocity == null)
-            _depthwiseKernelsVelocity = new Tensor<T>(_depthwiseKernels.Shape.ToArray());
+            _depthwiseKernelsVelocity = new Tensor<T>(_depthwiseKernels._shape);
         if (_pointwiseKernelsVelocity == null)
-            _pointwiseKernelsVelocity = new Tensor<T>(_pointwiseKernels.Shape.ToArray());
+            _pointwiseKernelsVelocity = new Tensor<T>(_pointwiseKernels._shape);
         if (_biasesVelocity == null)
             _biasesVelocity = new Tensor<T>([_outputDepth]);
 
@@ -931,7 +931,7 @@ public partial class SeparableConvolutionalLayer<T> : LayerBase<T>
                 $"SeparableConv2D input requires at least 3D tensor [C, H, W]. Got rank {input.Shape.Length}.");
         }
 
-        var originalInputShape = input.Shape.ToArray();
+        var originalInputShape = input._shape;
         int rank = input.Shape.Length;
         bool addedBatchDimension = false;
 

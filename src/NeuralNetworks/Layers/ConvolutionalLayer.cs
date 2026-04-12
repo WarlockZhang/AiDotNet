@@ -852,7 +852,7 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
         // For uniform distribution: Var(W) = bound^2/3, so bound = sqrt(3 * 2/fanIn) = sqrt(6/fanIn)
         int fanIn = InputDepth * KernelSize * KernelSize;
         double bound = Math.Sqrt(6.0 / fanIn);
-        var kernelShape = _kernels.Shape.ToArray();
+        var kernelShape = _kernels._shape;
         var initData = Engine.TensorRandomUniformRange<T>(kernelShape, NumOps.FromDouble(-bound), NumOps.FromDouble(bound));
         // Copy into existing tensor to avoid orphaning pre-allocated buffer
         initData.Data.Span.CopyTo(_kernels.Data.Span);
@@ -894,7 +894,7 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
             throw new ArgumentException($"Convolutional layer requires at least 3D tensor [C, H, W]. Got rank {input.Shape.Length}.");
 
         Tensor<T> input4D;
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         if (rank == 3)
@@ -1032,7 +1032,7 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
                 $"Conv2D input requires at least 3D tensor [C, H, W]. Got rank {input.Shape.Length}.");
         }
 
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Reshape input to 4D [B, C, H, W] for convolution
@@ -1088,7 +1088,7 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
             // Store GPU-resident tensors for BackwardGpu (no CPU roundtrip)
             _lastInputGpu = input4D;
             _lastOutputGpu = result;
-            _gpuInputShape4D = input4D.Shape.ToArray();
+            _gpuInputShape4D = input4D._shape;
 
             // Also download to CPU for hybrid CPU/GPU backward compatibility
             _lastInput = input4D;
@@ -1209,13 +1209,13 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
             // Initialize velocity tensors if needed (for SGD momentum, even if 0 here)
             if (_kernelsVelocity == null)
             {
-                _kernelsVelocity = new Tensor<T>(_kernels.Shape.ToArray());
+                _kernelsVelocity = new Tensor<T>(_kernels._shape);
                 _kernelsVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_kernelsVelocity, PersistentTensorRole.OptimizerState);
             }
             if (_biasesVelocity == null)
             {
-                _biasesVelocity = new Tensor<T>(_biases.Shape.ToArray());
+                _biasesVelocity = new Tensor<T>(_biases._shape);
                 _biasesVelocity.Fill(NumOps.Zero);
                 gpuEngine.RegisterPersistentTensor(_biasesVelocity, PersistentTensorRole.OptimizerState);
             }

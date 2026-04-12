@@ -207,20 +207,20 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         int idx = 0;
 
         // Create new mutable tensors to avoid immutable Engine tensor issue
-        _Wq = new Tensor<T>(_Wq.Shape.ToArray());
+        _Wq = new Tensor<T>(_Wq._shape);
         var wqSpan = _Wq.Data.Span;
         for (int i = 0; i < wqLen; i++) wqSpan[i] = parameters[idx++];
 
-        _Wk = new Tensor<T>(_Wk.Shape.ToArray());
+        _Wk = new Tensor<T>(_Wk._shape);
         var wkSpan = _Wk.Data.Span;
         for (int i = 0; i < wkLen; i++) wkSpan[i] = parameters[idx++];
 
-        _Wv = new Tensor<T>(_Wv.Shape.ToArray());
+        _Wv = new Tensor<T>(_Wv._shape);
         var wvSpan = _Wv.Data.Span;
         for (int i = 0; i < wvLen; i++) wvSpan[i] = parameters[idx++];
 
         int woLen = _Wo.Length;
-        _Wo = new Tensor<T>(_Wo.Shape.ToArray());
+        _Wo = new Tensor<T>(_Wo._shape);
         var woSpan = _Wo.Data.Span;
         for (int i = 0; i < woLen; i++) woSpan[i] = parameters[idx++];
 
@@ -452,7 +452,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         int rank = input.Shape.Length;
         _inputWas2D = rank == 2;
         Tensor<T> input3D;
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
 
         if (_inputWas2D)
         {
@@ -629,7 +629,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
             throw new InvalidOperationException("GPU backend unavailable.");
 
         var input = inputs[0];
-        var shape = input.Shape.ToArray();
+        var shape = input._shape;
 
         // Handle 2D [Batch, InputSize] or 3D [Batch, Seq, InputSize] input
         int batchSize;
@@ -703,7 +703,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
             _gpuInput = input3D;
             _gpuBatchSize = batchSize;
             _gpuSeqLen = seqLen;
-            _gpuInputShape = input.Shape.ToArray();
+            _gpuInputShape = input._shape;
 
             // Reshape Q, K, V back to 3D [B, S, A] for backward
             _gpuQ = gpuEngine.ReshapeGpu(qFlat, [batchSize, seqLen, _attentionSize]);

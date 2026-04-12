@@ -461,7 +461,7 @@ public class PositionalEncodingLayer<T> : LayerBase<T>
             throw new InvalidOperationException("ForwardGpu requires DirectGpuTensorEngine.");
 
         var input = inputs[0];
-        var inputShape = input.Shape.ToArray();
+        var inputShape = input._shape;
         int rank = inputShape.Length;
 
         // Handle 1D input by treating as [1, embed]

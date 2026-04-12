@@ -418,7 +418,7 @@ public partial class GraphTransformerLayer<T> : LayerBase<T>, IGraphConvolutionL
     private void InitializeTensor(Tensor<T> tensor, T scale)
     {
         var randomTensor = Tensor<T>.CreateRandom(tensor.Shape.ToArray());
-        var halfTensor = new Tensor<T>(tensor.Shape.ToArray());
+        var halfTensor = new Tensor<T>(tensor._shape);
         halfTensor.Fill(NumOps.FromDouble(0.5));
         var shifted = Engine.TensorSubtract(randomTensor, halfTensor);
         var scaled = Engine.TensorMultiplyScalar(shifted, scale);
@@ -462,7 +462,7 @@ public partial class GraphTransformerLayer<T> : LayerBase<T>, IGraphConvolutionL
         }
 
         // Store original shape for any-rank tensor support
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int rank = input.Shape.Length;
 
         // Graph layer expects 3D: [batchSize, numNodes, features]
@@ -596,7 +596,7 @@ public partial class GraphTransformerLayer<T> : LayerBase<T>, IGraphConvolutionL
         var input = inputs[0];
 
         // Handle batch dimension
-        int[] inputShape = input.Shape.ToArray();
+        int[] inputShape = input._shape;
         int batchSize;
         int numNodes;
         int inputFeatures;
@@ -1165,7 +1165,7 @@ public partial class GraphTransformerLayer<T> : LayerBase<T>, IGraphConvolutionL
     /// </remarks>
     private Tensor<T> ApplyFFNActivation(Tensor<T> input)
     {
-        var result = TensorAllocator.Rent<T>(input.Shape.ToArray());
+        var result = TensorAllocator.Rent<T>(input._shape);
         for (int i = 0; i < input.Length; i++)
         {
             result[i] = _ffnActivation.Activate(input.GetFlat(i));
@@ -1213,7 +1213,7 @@ public partial class GraphTransformerLayer<T> : LayerBase<T>, IGraphConvolutionL
     /// </remarks>
     private Tensor<T> BackwardFFNActivation(Tensor<T> input, Tensor<T> grad)
     {
-        var result = new Tensor<T>(grad.Shape.ToArray());
+        var result = new Tensor<T>(grad._shape);
         for (int i = 0; i < input.Length; i++)
         {
             T x = input.GetFlat(i);

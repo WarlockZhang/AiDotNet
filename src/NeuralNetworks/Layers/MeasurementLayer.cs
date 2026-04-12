@@ -140,7 +140,7 @@ public class MeasurementLayer<T> : LayerBase<T>
     /// </remarks>
     public override Tensor<T> Forward(Tensor<T> input)
     {
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
         int stateSize = input.Shape[^1];
         if (stateSize != InputShape[0])
         {

@@ -261,7 +261,7 @@ public partial class ReadoutLayer<T> : LayerBase<T>
     public override Tensor<T> Forward(Tensor<T> input)
     {
         _lastInput = input;
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
 
         int inputSize = input.Shape[^1];
         if (inputSize != InputShape[0])
@@ -336,7 +336,7 @@ public partial class ReadoutLayer<T> : LayerBase<T>
             throw new InvalidOperationException("ForwardGpu requires a DirectGpuTensorEngine.");
 
         var input = inputs[0];
-        _originalInputShape = input.Shape.ToArray();
+        _originalInputShape = input._shape;
 
         int inputSize = input.Shape[^1];
         if (inputSize != InputShape[0])
@@ -537,8 +537,8 @@ public partial class ReadoutLayer<T> : LayerBase<T>
 
     public override void ClearGradients()
     {
-        _weightGradients = new Tensor<T>(_weights.Shape.ToArray());
-        _biasGradients = new Tensor<T>(_bias.Shape.ToArray());
+        _weightGradients = new Tensor<T>(_weights._shape);
+        _biasGradients = new Tensor<T>(_bias._shape);
     }
 
     public override void SetParameters(Vector<T> parameters)
