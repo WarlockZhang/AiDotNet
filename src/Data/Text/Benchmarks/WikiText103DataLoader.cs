@@ -78,9 +78,13 @@ public class WikiText103DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, 
 
         if (!File.Exists(filePath))
         {
+            string hint = _options.AutoDownload
+                ? "Auto-download completed but the expected file was not found. " +
+                  $"The archive may have a different internal layout. " +
+                  $"Check {_dataPath} for extracted contents."
+                : $"Enable AutoDownload or download and extract {DownloadUrl} to {_dataPath}.";
             throw new FileNotFoundException(
-                $"WikiText-103 data not found at {filePath}. " +
-                $"Enable AutoDownload or download and extract {DownloadUrl} to {_dataPath}.");
+                $"WikiText-103 data not found at {filePath}. {hint}");
         }
 
         string text = await FilePolyfill.ReadAllTextAsync(filePath, cancellationToken);
@@ -166,7 +170,7 @@ public class WikiText103DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, 
     {
         string subDir = Path.Combine(_dataPath, "wikitext-103");
         if (Directory.Exists(subDir) &&
-            Directory.GetFiles(subDir, "wiki.*.tokens").Length > 0)
+            Directory.EnumerateFiles(subDir, "wiki.*.tokens").Any())
             return subDir;
         return _dataPath;
     }
