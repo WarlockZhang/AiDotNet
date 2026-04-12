@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -11,9 +13,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class SemiSupervisedClassifierTestBase : ClassificationModelTestBase
 {
-    [Fact]
-    public void SemiSupervisedPredictions_ShouldBeValid()
+    [Fact(Timeout = 60000)]
+    public async Task SemiSupervisedPredictions_ShouldBeValid()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, Features, NumClasses, rng);
@@ -29,9 +33,11 @@ public abstract class SemiSupervisedClassifierTestBase : ClassificationModelTest
         }
     }
 
-    [Fact]
-    public void SemiSupervised_OutputDimMatchesInput()
+    [Fact(Timeout = 60000)]
+    public async Task SemiSupervised_OutputDimMatchesInput()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, Features, NumClasses, rng);

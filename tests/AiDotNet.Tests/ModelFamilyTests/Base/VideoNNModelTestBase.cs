@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -18,9 +20,11 @@ public abstract class VideoNNModelTestBase : NeuralNetworkModelTestBase
     // At minimum, output should not be empty.
     // =====================================================
 
-    [Fact]
-    public void TemporalDim_Preserved()
+    [Fact(Timeout = 120000)]
+    public async Task TemporalDim_Preserved()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -39,9 +43,11 @@ public abstract class VideoNNModelTestBase : NeuralNetworkModelTestBase
     // A single-frame input is a valid edge case (degenerate video).
     // =====================================================
 
-    [Fact]
-    public void SingleFrame_ShouldNotCrash()
+    [Fact(Timeout = 120000)]
+    public async Task SingleFrame_ShouldNotCrash()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
 
         // Create minimal input (use InputShape but reduce if possible)
@@ -65,9 +71,11 @@ public abstract class VideoNNModelTestBase : NeuralNetworkModelTestBase
     // will cause temporal flickering artifacts.
     // =====================================================
 
-    [Fact]
-    public void ConsecutiveFrames_SmoothOutput()
+    [Fact(Timeout = 120000)]
+    public async Task ConsecutiveFrames_SmoothOutput()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
 

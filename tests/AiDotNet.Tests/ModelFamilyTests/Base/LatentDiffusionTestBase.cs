@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -18,9 +20,11 @@ public abstract class LatentDiffusionTestBase : DiffusionModelTestBase
     // noise, the denoising network is inverted.
     // =====================================================
 
-    [Fact]
-    public void DenoisingProgress_Monotonic()
+    [Fact(Timeout = 120000)]
+    public async Task DenoisingProgress_Monotonic()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var target = CreateRandomTensor(InputShape, rng);
@@ -64,9 +68,11 @@ public abstract class LatentDiffusionTestBase : DiffusionModelTestBase
     // Discontinuous output indicates unstable generation.
     // =====================================================
 
-    [Fact]
-    public void LatentSpace_IsContinuous()
+    [Fact(Timeout = 120000)]
+    public async Task LatentSpace_IsContinuous()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
 
@@ -104,9 +110,11 @@ public abstract class LatentDiffusionTestBase : DiffusionModelTestBase
     // cause artifacts when decoded back to pixel/audio space.
     // =====================================================
 
-    [Fact]
-    public void OutputBounded_AfterDenoising()
+    [Fact(Timeout = 120000)]
+    public async Task OutputBounded_AfterDenoising()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var input = CreateRandomTensor(InputShape, rng);

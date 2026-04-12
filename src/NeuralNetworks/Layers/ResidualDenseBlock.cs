@@ -826,7 +826,7 @@ public class ResidualDenseBlock<T> : LayerBase<T>
         var scaleValue = numOps.FromDouble(scale);
 
         // Create a constant tensor filled with the scale value matching the input shape
-        var scaleTensor = new Tensor<T>(node.Value.Shape.ToArray());
+        var scaleTensor = new Tensor<T>(node.Value._shape);
         for (int i = 0; i < scaleTensor.Length; i++)
         {
             scaleTensor.Data.Span[i] = scaleValue;

@@ -100,6 +100,11 @@ public partial class RBMLayer<T> : LayerBase<T>
     private Tensor<T> _weights;
 
     /// <summary>
+    /// Cached transpose of weights — invalidated when weights change via SetParameters/CD update.
+    /// </summary>
+    private Tensor<T>? _weightsTCache;
+
+    /// <summary>
     /// Gets or sets the bias values for the visible units.
     /// </summary>
     /// <remarks>
@@ -403,23 +408,25 @@ public partial class RBMLayer<T> : LayerBase<T>
             flatBatch *= input.Shape[d];
 
         var visible2D = rank == 1
-            ? input.Reshape([1, _visibleUnits])
-            : input.Reshape([flatBatch, _visibleUnits]);
+            ? Engine.Reshape(input, [1, _visibleUnits])
+            : Engine.Reshape(input, [flatBatch, _visibleUnits]);
 
         _lastVisibleInput = visible2D;
 
-        Tensor<T> hiddenProbs = SampleHiddenGivenVisibleTensor(visible2D);
+        // Use FusedLinear for tape-tracked forward: h = sigmoid(v @ W^T + b_h)
+        _weightsTCache ??= Engine.TensorTranspose(_weights);
+        Tensor<T> hiddenProbs = Engine.FusedLinear(visible2D, _weightsTCache, _hiddenBiases, FusedActivationType.Sigmoid);
         _lastHiddenOutput = hiddenProbs;
 
         if (rank == 1)
-            return hiddenProbs.Reshape([_hiddenUnits]);
+            return Engine.Reshape(hiddenProbs, [_hiddenUnits]);
 
         var outputShape = new int[rank];
         for (int d = 0; d < rank - 1; d++)
             outputShape[d] = input.Shape[d];
         outputShape[rank - 1] = _hiddenUnits;
 
-        return hiddenProbs.Reshape(outputShape);
+        return Engine.Reshape(hiddenProbs, outputShape);
     }
 
     /// <summary>
@@ -594,6 +601,7 @@ public partial class RBMLayer<T> : LayerBase<T>
         var weightGradient = Engine.TensorSubtract(positiveOuter, negativeOuter);
         var weightDelta = Engine.TensorMultiplyScalar(weightGradient, batchScale);
         _weights = Engine.TensorAdd(_weights, weightDelta);
+        _weightsTCache = null;
     }
 
 
@@ -707,7 +715,7 @@ public partial class RBMLayer<T> : LayerBase<T>
     /// </summary>
     private Tensor<T> SampleBinaryStatesTensor(Tensor<T> probabilities)
     {
-        var randomTensor = Tensor<T>.CreateRandom(probabilities.Shape.ToArray());
+        var randomTensor = Tensor<T>.CreateRandom(probabilities._shape);
         return Engine.TensorGreaterThan(probabilities, randomTensor);
     }
 
@@ -789,6 +797,7 @@ public partial class RBMLayer<T> : LayerBase<T>
         if (_weightsGradient != null && _visibleBiasesGradient != null && _hiddenBiasesGradient != null)
         {
             _weights = Engine.TensorSubtract(_weights, Engine.TensorMultiplyScalar(_weightsGradient, learningRate));
+            _weightsTCache = null;
             _visibleBiases = Engine.TensorSubtract(_visibleBiases, Engine.TensorMultiplyScalar(_visibleBiasesGradient, learningRate));
             _hiddenBiases = Engine.TensorSubtract(_hiddenBiases, Engine.TensorMultiplyScalar(_hiddenBiasesGradient, learningRate));
             return;
@@ -877,6 +886,7 @@ public partial class RBMLayer<T> : LayerBase<T>
         // _hiddenBiases is a 1D Tensor [hiddenUnits]
         for (int i = 0; i < _hiddenBiases.Length; i++)
             _hiddenBiases.SetFlat(i, parameters[idx++]);
+        _weightsTCache = null;
     }
 
     /// <summary>

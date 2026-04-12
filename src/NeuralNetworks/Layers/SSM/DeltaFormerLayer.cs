@@ -230,24 +230,24 @@ public partial class DeltaFormerLayer<T> : LayerBase<T>
         if (rank < 3) batchSize = 1;
 
         var input3D = rank == 2
-            ? input.Reshape(1, seqLen, modelDim)
-            : input.Reshape(batchSize, seqLen, modelDim);
+            ? Engine.Reshape(input, new[] { 1, seqLen, modelDim })
+            : Engine.Reshape(input, new[] { batchSize, seqLen, modelDim });
 
         _lastInput = input3D;
 
         // Step 1: Q, K, V projections
-        var inputFlat = input3D.Reshape(batchSize * seqLen, _modelDimension);
-        var q = Engine.TensorMatMul(inputFlat, _queryWeights).Reshape(batchSize, seqLen, _modelDimension);
-        var k = Engine.TensorMatMul(inputFlat, _keyWeights).Reshape(batchSize, seqLen, _modelDimension);
-        var v = Engine.TensorMatMul(inputFlat, _valueWeights).Reshape(batchSize, seqLen, _modelDimension);
+        var inputFlat = Engine.Reshape(input3D, new[] { batchSize * seqLen, _modelDimension });
+        var q = Engine.Reshape(Engine.TensorMatMul(inputFlat, _queryWeights), new[] { batchSize, seqLen, _modelDimension });
+        var k = Engine.Reshape(Engine.TensorMatMul(inputFlat, _keyWeights), new[] { batchSize, seqLen, _modelDimension });
+        var v = Engine.Reshape(Engine.TensorMatMul(inputFlat, _valueWeights), new[] { batchSize, seqLen, _modelDimension });
         _lastQuery = q;
         _lastKey = k;
         _lastValue = v;
 
         // Step 2: Output gate
-        var gateRaw = Engine.TensorBroadcastAdd(
+        var gateRaw = Engine.Reshape(Engine.TensorBroadcastAdd(
             Engine.TensorMatMul(inputFlat, _outputGateWeights),
-            _outputGateBias.Reshape(1, _modelDimension)).Reshape(batchSize, seqLen, _modelDimension);
+            Engine.Reshape(_outputGateBias, new[] { 1, _modelDimension })), new[] { batchSize, seqLen, _modelDimension });
         var gate = Engine.Sigmoid(gateRaw);
         _lastGate = gate;
         _lastGateRaw = gateRaw;
@@ -268,24 +268,24 @@ public partial class DeltaFormerLayer<T> : LayerBase<T>
         var gatedOutput = Engine.TensorMultiply(mechanismOutput, gate);
 
         // Step 5: Output projection
-        var gatedFlat = gatedOutput.Reshape(batchSize * seqLen, _modelDimension);
+        var gatedFlat = Engine.Reshape(gatedOutput, new[] { batchSize * seqLen, _modelDimension });
         var outputFlat = Engine.TensorMatMul(gatedFlat, _outputProjectionWeights);
-        var outBias = _outputProjectionBias.Reshape(1, _modelDimension);
+        var outBias = Engine.Reshape(_outputProjectionBias, new[] { 1, _modelDimension });
         outputFlat = Engine.TensorBroadcastAdd(outputFlat, outBias);
-        var output3D = outputFlat.Reshape(batchSize, seqLen, _modelDimension);
+        var output3D = Engine.Reshape(outputFlat, new[] { batchSize, seqLen, _modelDimension });
 
         var result = ApplyActivation(output3D);
         _lastOutput = result;
 
         if (rank == 2)
-            return result.Reshape(seqLen, _modelDimension);
+            return Engine.Reshape(result, new[] { seqLen, _modelDimension });
 
         var outputShape = new int[rank];
         for (int i = 0; i < rank - 2; i++)
             outputShape[i] = input.Shape[i];
         outputShape[rank - 2] = seqLen;
         outputShape[rank - 1] = _modelDimension;
-        return result.Reshape(outputShape);
+        return Engine.Reshape(result, outputShape);
     }
 
     /// <summary>
@@ -451,169 +451,6 @@ public partial class DeltaFormerLayer<T> : LayerBase<T>
 
         _lastStates = allStates;
         return output;
-    }
-
-    private void DeltaRuleBackward(
-        Tensor<T> dOutput, Tensor<T> q, Tensor<T> k, Tensor<T> v,
-        int batchSize, int seqLen,
-        out Tensor<T> dQ, out Tensor<T> dK, out Tensor<T> dV)
-    {
-        dQ = TensorAllocator.Rent<T>(new[] { batchSize, seqLen, _modelDimension });
-        dK = TensorAllocator.Rent<T>(new[] { batchSize, seqLen, _modelDimension });
-        dV = TensorAllocator.Rent<T>(new[] { batchSize, seqLen, _modelDimension });
-
-        T keyScale = NumOps.FromDouble(1.0 / Math.Sqrt(_headDimension));
-        var dState = TensorAllocator.Rent<T>(new[] { batchSize, _numHeads, _headDimension, _headDimension });
-        var lastStates = _lastStates ?? throw new InvalidOperationException("States not computed.");
-
-        for (int t = seqLen - 1; t >= 0; t--)
-        {
-            for (int hi = 0; hi < _numHeads; hi++)
-            {
-                int dimStart = hi * _headDimension;
-
-                for (int bi = 0; bi < batchSize; bi++)
-                {
-                    // dS += dO * q^T (from output = S * q)
-                    for (int di = 0; di < _headDimension; di++)
-                    {
-                        int flatDi = dimStart + di;
-                        T dO = dOutput[new[] { bi, t, flatDi }];
-                        for (int ki = 0; ki < _headDimension; ki++)
-                        {
-                            int flatKi = dimStart + ki;
-                            T qVal = q[new[] { bi, t, flatKi }];
-                            T sVal = lastStates[new[] { bi, t + 1, hi, di, ki }];
-
-                            dState[new[] { bi, hi, di, ki }] = NumOps.Add(
-                                dState[new[] { bi, hi, di, ki }],
-                                NumOps.Multiply(dO, qVal));
-
-                            dQ[new[] { bi, t, flatKi }] = NumOps.Add(
-                                dQ[new[] { bi, t, flatKi }],
-                                NumOps.Multiply(dO, sVal));
-                        }
-                    }
-
-                    // State update backward: S = S_prev + delta * k^T
-                    for (int di = 0; di < _headDimension; di++)
-                    {
-                        int flatDi = dimStart + di;
-                        T vVal = v[new[] { bi, t, flatDi }];
-
-                        // Recompute delta[di]
-                        T sK_di = NumOps.Zero;
-                        for (int ki2 = 0; ki2 < _headDimension; ki2++)
-                        {
-                            int flatKi2 = dimStart + ki2;
-                            T kVal2 = NumOps.Multiply(k[new[] { bi, t, flatKi2 }], keyScale);
-                            T sPrev = lastStates[new[] { bi, t, hi, di, ki2 }];
-                            sK_di = NumOps.Add(sK_di, NumOps.Multiply(sPrev, kVal2));
-                        }
-                        T deltaDi = NumOps.Subtract(vVal, sK_di);
-
-                        for (int ki = 0; ki < _headDimension; ki++)
-                        {
-                            int flatKi = dimStart + ki;
-                            T kVal = NumOps.Multiply(k[new[] { bi, t, flatKi }], keyScale);
-                            T dS = dState[new[] { bi, hi, di, ki }];
-
-                            // dV: gradient flows through delta = v - S*k
-                            dV[new[] { bi, t, flatDi }] = NumOps.Add(
-                                dV[new[] { bi, t, flatDi }],
-                                NumOps.Multiply(dS, kVal));
-
-                            // dK: gradient from delta * k^T
-                            dK[new[] { bi, t, flatKi }] = NumOps.Add(
-                                dK[new[] { bi, t, flatKi }],
-                                NumOps.Multiply(deltaDi, dS));
-
-                            // dState propagates to previous timestep unchanged (no forget gate)
-                            // plus dS from -S_prev*k term in delta
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private void AttentionBackward(
-        Tensor<T> dOutput, Tensor<T> q, Tensor<T> k, Tensor<T> v,
-        int batchSize, int seqLen,
-        out Tensor<T> dQ, out Tensor<T> dK, out Tensor<T> dV)
-    {
-        dQ = TensorAllocator.Rent<T>(new[] { batchSize, seqLen, _modelDimension });
-        dK = TensorAllocator.Rent<T>(new[] { batchSize, seqLen, _modelDimension });
-        dV = TensorAllocator.Rent<T>(new[] { batchSize, seqLen, _modelDimension });
-
-        T scale = NumOps.FromDouble(1.0 / Math.Sqrt(_headDimension));
-        var lastAttnWeights = _lastAttentionWeights ?? throw new InvalidOperationException("Attention weights not computed.");
-
-        for (int bi = 0; bi < batchSize; bi++)
-        {
-            for (int hi = 0; hi < _numHeads; hi++)
-            {
-                int dimStart = hi * _headDimension;
-
-                for (int ti = 0; ti < seqLen; ti++)
-                {
-                    // dV: dV[tj] += attn_weight[ti, tj] * dO[ti]
-                    for (int tj = 0; tj < seqLen; tj++)
-                    {
-                        T weight = lastAttnWeights[new[] { bi, hi, ti, tj }];
-                        for (int di = 0; di < _headDimension; di++)
-                        {
-                            int flatDi = dimStart + di;
-                            T dO = dOutput[new[] { bi, ti, flatDi }];
-                            dV[new[] { bi, tj, flatDi }] = NumOps.Add(
-                                dV[new[] { bi, tj, flatDi }],
-                                NumOps.Multiply(weight, dO));
-                        }
-                    }
-
-                    // dAttnWeights[ti, tj] = sum_d(dO[ti,d] * V[tj,d])
-                    var dAttnWeights = new T[seqLen];
-                    for (int tj = 0; tj < seqLen; tj++)
-                    {
-                        T dAW = NumOps.Zero;
-                        for (int di = 0; di < _headDimension; di++)
-                        {
-                            int flatDi = dimStart + di;
-                            dAW = NumOps.Add(dAW,
-                                NumOps.Multiply(dOutput[new[] { bi, ti, flatDi }], v[new[] { bi, tj, flatDi }]));
-                        }
-                        dAttnWeights[tj] = dAW;
-                    }
-
-                    // Softmax backward: dScore = attn * (dAttn - sum(attn * dAttn))
-                    T sumAttnDAttn = NumOps.Zero;
-                    for (int tj = 0; tj < seqLen; tj++)
-                    {
-                        T w = lastAttnWeights[new[] { bi, hi, ti, tj }];
-                        sumAttnDAttn = NumOps.Add(sumAttnDAttn, NumOps.Multiply(w, dAttnWeights[tj]));
-                    }
-
-                    for (int tj = 0; tj < seqLen; tj++)
-                    {
-                        T w = lastAttnWeights[new[] { bi, hi, ti, tj }];
-                        T dScore = NumOps.Multiply(w, NumOps.Subtract(dAttnWeights[tj], sumAttnDAttn));
-                        dScore = NumOps.Multiply(dScore, scale);
-
-                        // dQ, dK from score = q^T * k
-                        for (int di = 0; di < _headDimension; di++)
-                        {
-                            int flatDi = dimStart + di;
-                            dQ[new[] { bi, ti, flatDi }] = NumOps.Add(
-                                dQ[new[] { bi, ti, flatDi }],
-                                NumOps.Multiply(dScore, k[new[] { bi, tj, flatDi }]));
-                            dK[new[] { bi, tj, flatDi }] = NumOps.Add(
-                                dK[new[] { bi, tj, flatDi }],
-                                NumOps.Multiply(dScore, q[new[] { bi, ti, flatDi }]));
-                        }
-                    }
-                }
-            }
-        }
     }
 
     private Tensor<T> CreateOnesLike(Tensor<T> template)

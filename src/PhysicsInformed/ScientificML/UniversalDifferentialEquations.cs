@@ -391,24 +391,15 @@ namespace AiDotNet.PhysicsInformed.ScientificML
             }
 
             SetTrainingMode(true);
-
-            // Step 1: Forward pass - compute learned corrections
-            Tensor<T> learned = Forward(input);
-            var known = BuildKnownDynamicsTensor(input);
-            var prediction = Engine.TensorAdd(known, learned);
-
-            // Step 2: Calculate loss
-            var lossFunction = LossFunction ?? new MeanSquaredErrorLoss<T>();
-            LastLoss = lossFunction.CalculateLoss(prediction.ToVector(), expectedOutput.ToVector());
-
-            // Step 3: Backward pass - compute gradients
-            var outputGradient = lossFunction.CalculateDerivative(prediction.ToVector(), expectedOutput.ToVector());
-            var outputGradientTensor = new Tensor<T>(prediction._shape, outputGradient);
-
-            // Step 4: Update parameters
-            _optimizer.UpdateParameters(Layers);
-
-            SetTrainingMode(false);
+            SetTrainingMode(true);
+            try
+            {
+                TrainWithTape(input, expectedOutput, _optimizer);
+            }
+            finally
+            {
+                SetTrainingMode(false);
+            }
         }
 
         /// <summary>

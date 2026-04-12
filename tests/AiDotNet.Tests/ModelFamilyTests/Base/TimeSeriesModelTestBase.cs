@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -34,9 +36,11 @@ public abstract class TimeSeriesModelTestBase
     // The model should predict higher values for later time points.
     // =====================================================
 
-    [Fact]
-    public void TrendRecovery_LaterTimeShouldHaveHigherPrediction()
+    [Fact(Timeout = 60000)]
+    public async Task TrendRecovery_LaterTimeShouldHaveHigherPrediction()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         if (!IsForecastingModel) return;
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
@@ -76,9 +80,11 @@ public abstract class TimeSeriesModelTestBase
     // Shifting all y-values by constant C should shift predictions by C.
     // =====================================================
 
-    [Fact]
-    public void TranslationEquivariance_ShiftingTargets_ShiftsPredictions()
+    [Fact(Timeout = 60000)]
+    public async Task TranslationEquivariance_ShiftingTargets_ShiftsPredictions()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         if (!IsForecastingModel) return;
         var rng1 = ModelTestHelpers.CreateSeededRandom(42);
         var rng2 = ModelTestHelpers.CreateSeededRandom(42);
@@ -114,9 +120,11 @@ public abstract class TimeSeriesModelTestBase
     // On data with clear trend + seasonality, model should outperform mean.
     // =====================================================
 
-    [Fact]
-    public void R2_ShouldBePositive_OnTrendData()
+    [Fact(Timeout = 60000)]
+    public async Task R2_ShouldBePositive_OnTrendData()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         // Stationary models (MA) cannot capture trends — skip this test for them
         if (!CanCaptureTrend) return;
 
@@ -163,9 +171,11 @@ public abstract class TimeSeriesModelTestBase
     // MATHEMATICAL INVARIANT: Training Error ≤ Test Error
     // =====================================================
 
-    [Fact]
-    public void TrainingError_ShouldNotExceedTestError()
+    [Fact(Timeout = 60000)]
+    public async Task TrainingError_ShouldNotExceedTestError()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         if (!IsForecastingModel) return;
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
@@ -193,9 +203,11 @@ public abstract class TimeSeriesModelTestBase
     // MATHEMATICAL INVARIANT: Residual Mean ≈ 0
     // =====================================================
 
-    [Fact]
-    public void ResidualMean_ShouldBeNearZero()
+    [Fact(Timeout = 60000)]
+    public async Task ResidualMean_ShouldBeNearZero()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         if (!IsForecastingModel) return;
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
@@ -221,9 +233,11 @@ public abstract class TimeSeriesModelTestBase
     // MATHEMATICAL INVARIANT: Scaling Equivariance
     // =====================================================
 
-    [Fact]
-    public void ScalingEquivariance_ScalingTargets_ScalesPredictions()
+    [Fact(Timeout = 60000)]
+    public async Task ScalingEquivariance_ScalingTargets_ScalesPredictions()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         if (!IsForecastingModel) return;
         var rng1 = ModelTestHelpers.CreateSeededRandom(42);
         var rng2 = ModelTestHelpers.CreateSeededRandom(42);
@@ -260,9 +274,11 @@ public abstract class TimeSeriesModelTestBase
     // produce worse R² — more data should help, not hurt.
     // =====================================================
 
-    [Fact]
-    public void MoreData_ShouldNotDegrade_R2()
+    [Fact(Timeout = 60000)]
+    public async Task MoreData_ShouldNotDegrade_R2()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         if (!CanCaptureTrend) return;
         if (!IsForecastingModel) return;
 
@@ -297,9 +313,11 @@ public abstract class TimeSeriesModelTestBase
     // BASIC CONTRACTS: Finite Predictions, Determinism, Output Shape, Clone, Metadata
     // =====================================================
 
-    [Fact]
-    public void Predictions_ShouldBeFinite()
+    [Fact(Timeout = 60000)]
+    public async Task Predictions_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = ModelTestHelpers.GenerateTimeSeriesData(TrainLength, rng);
@@ -315,9 +333,11 @@ public abstract class TimeSeriesModelTestBase
         }
     }
 
-    [Fact]
-    public void Predict_ShouldBeDeterministic()
+    [Fact(Timeout = 60000)]
+    public async Task Predict_ShouldBeDeterministic()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = ModelTestHelpers.GenerateTimeSeriesData(TrainLength, rng);
@@ -331,9 +351,11 @@ public abstract class TimeSeriesModelTestBase
             Assert.Equal(pred1[i], pred2[i]);
     }
 
-    [Fact]
-    public void OutputDimension_ShouldMatchInputRows()
+    [Fact(Timeout = 60000)]
+    public async Task OutputDimension_ShouldMatchInputRows()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = ModelTestHelpers.GenerateTimeSeriesData(TrainLength, rng);
@@ -343,9 +365,11 @@ public abstract class TimeSeriesModelTestBase
         Assert.Equal(TestLength, model.Predict(testX).Length);
     }
 
-    [Fact]
-    public void Clone_ShouldProduceIdenticalPredictions()
+    [Fact(Timeout = 60000)]
+    public async Task Clone_ShouldProduceIdenticalPredictions()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = ModelTestHelpers.GenerateTimeSeriesData(TrainLength, rng);
@@ -360,9 +384,11 @@ public abstract class TimeSeriesModelTestBase
             Assert.Equal(pred1[i], pred2[i]);
     }
 
-    [Fact]
-    public void Metadata_ShouldExistAfterTraining()
+    [Fact(Timeout = 60000)]
+    public async Task Metadata_ShouldExistAfterTraining()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = ModelTestHelpers.GenerateTimeSeriesData(TrainLength, rng);
@@ -371,24 +397,43 @@ public abstract class TimeSeriesModelTestBase
         Assert.NotNull(model.GetModelMetadata());
     }
 
-    [Fact]
-    public void Parameters_ShouldBeNonEmpty_AfterTraining()
+    [Fact(Timeout = 60000)]
+    public async Task Parameters_ShouldBeNonEmpty_AfterTraining()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = ModelTestHelpers.GenerateTimeSeriesData(TrainLength, rng);
 
         model.Train(trainX, trainY);
-        Assert.True(((IParameterizable<double, Matrix<double>, Vector<double>>)model).GetParameters().Length > 0, "Trained model should have parameters.");
+
+        // Not all time series models implement IParameterizable (e.g., STLDecomposition,
+        // InterventionAnalysis are parameter-free). Per Liskov substitution, only check
+        // models that expose parameters via IParameterizable.
+        if (model is IParameterizable<double, Matrix<double>, Vector<double>> parameterizable)
+        {
+            Assert.True(parameterizable.GetParameters().Length > 0, "Trained parameterizable model should have parameters.");
+        }
+        else
+        {
+            // Non-parameterizable models should still produce valid predictions after training
+            var (testX, _) = ModelTestHelpers.GenerateTimeSeriesData(5, ModelTestHelpers.CreateSeededRandom(99));
+            var prediction = model.Predict(testX);
+            Assert.NotNull(prediction);
+            Assert.True(prediction.Length > 0, "Non-parameterizable model should still produce predictions after training.");
+        }
     }
 
     // =====================================================
     // INTEGRATION: Builder Pipeline
     // =====================================================
 
-    [Fact]
-    public void Builder_ShouldProduceResult()
+    [Fact(Timeout = 60000)]
+    public async Task Builder_ShouldProduceResult()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var (trainX, trainY) = ModelTestHelpers.GenerateTimeSeriesData(TrainLength, rng);
         var loader = AiDotNet.Data.Loaders.DataLoaders.FromMatrixVector(trainX, trainY);
@@ -403,9 +448,11 @@ public abstract class TimeSeriesModelTestBase
         Assert.NotNull(result);
     }
 
-    [Fact]
-    public void Builder_R2ShouldBePositive()
+    [Fact(Timeout = 60000)]
+    public async Task Builder_R2ShouldBePositive()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var (trainX, trainY) = ModelTestHelpers.GenerateTimeSeriesData(TrainLength, rng);
         var loader = AiDotNet.Data.Loaders.DataLoaders.FromMatrixVector(trainX, trainY);

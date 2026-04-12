@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -10,9 +12,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class AudioDiffusionTestBase : LatentDiffusionTestBase
 {
-    [Fact]
-    public void AudioLength_ShouldBeReasonable()
+    [Fact(Timeout = 120000)]
+    public async Task AudioLength_ShouldBeReasonable()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var input = CreateRandomTensor(InputShape, rng);
@@ -22,9 +26,11 @@ public abstract class AudioDiffusionTestBase : LatentDiffusionTestBase
             $"Audio output length ({output.Length}) is unreasonably large relative to input ({input.Length}).");
     }
 
-    [Fact]
-    public void SpectralEnergy_ShouldBeFinite()
+    [Fact(Timeout = 120000)]
+    public async Task SpectralEnergy_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var input = CreateRandomTensor(InputShape, rng);

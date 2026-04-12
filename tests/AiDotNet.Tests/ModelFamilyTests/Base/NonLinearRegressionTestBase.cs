@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -17,9 +19,11 @@ public abstract class NonLinearRegressionTestBase : RegressionModelTestBase
     // If it can't, the non-linear capacity is not functioning.
     // =====================================================
 
-    [Fact]
-    public void CanFitQuadratic()
+    [Fact(Timeout = 60000)]
+    public async Task CanFitQuadratic()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         int n = TrainSamples;
         var x = new Matrix<double>(n, 1);
@@ -50,9 +54,11 @@ public abstract class NonLinearRegressionTestBase : RegressionModelTestBase
     // non-linear model should have lower MSE than a constant predictor.
     // =====================================================
 
-    [Fact]
-    public void NonLinearResiduals_ShouldBeSmaller()
+    [Fact(Timeout = 60000)]
+    public async Task NonLinearResiduals_ShouldBeSmaller()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         int n = TrainSamples;
         var x = new Matrix<double>(n, 1);
@@ -94,9 +100,11 @@ public abstract class NonLinearRegressionTestBase : RegressionModelTestBase
     // be finite. Infinite extrapolation indicates numerical instability.
     // =====================================================
 
-    [Fact]
-    public void Extrapolation_ShouldBeFinite()
+    [Fact(Timeout = 60000)]
+    public async Task Extrapolation_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var (trainX, trainY) = ModelTestHelpers.GenerateLinearData(TrainSamples, 1, rng);
 

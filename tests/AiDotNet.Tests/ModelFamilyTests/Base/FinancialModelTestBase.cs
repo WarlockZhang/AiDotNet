@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -18,9 +20,11 @@ public abstract class FinancialModelTestBase : NeuralNetworkModelTestBase
     // must always be finite. NaN/Inf in financial output is catastrophic.
     // =====================================================
 
-    [Fact]
-    public void FinancialPredictions_ShouldBeFinite()
+    [Fact(Timeout = 60000)]
+    public async Task FinancialPredictions_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -41,9 +45,11 @@ public abstract class FinancialModelTestBase : NeuralNetworkModelTestBase
     // A financial model that ignores its input data is useless.
     // =====================================================
 
-    [Fact]
-    public void DifferentMarketData_DifferentPredictions()
+    [Fact(Timeout = 60000)]
+    public async Task DifferentMarketData_DifferentPredictions()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
 
         var bullish = CreateConstantTensor(InputShape, 0.8);  // simulating upward data
@@ -73,9 +79,11 @@ public abstract class FinancialModelTestBase : NeuralNetworkModelTestBase
     // cause catastrophic trading decisions.
     // =====================================================
 
-    [Fact]
-    public void Output_ShouldBeBounded()
+    [Fact(Timeout = 60000)]
+    public async Task Output_ShouldBeBounded()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -94,9 +102,11 @@ public abstract class FinancialModelTestBase : NeuralNetworkModelTestBase
     // A market with no data/activity is a valid edge case.
     // =====================================================
 
-    [Fact]
-    public void ZeroInput_ShouldNotCrash()
+    [Fact(Timeout = 60000)]
+    public async Task ZeroInput_ShouldNotCrash()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var zeroInput = CreateConstantTensor(InputShape, 0.0);
 

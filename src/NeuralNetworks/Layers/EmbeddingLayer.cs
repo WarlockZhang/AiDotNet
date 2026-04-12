@@ -296,7 +296,7 @@ public partial class EmbeddingLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>, I
         AuxiliaryLossWeight = NumOps.FromDouble(0.0001);
         _lastEmbeddingRegularizationLoss = NumOps.Zero;
 
-        _embeddingTensor = new Tensor<T>([vocabularySize, embeddingDimension]);
+        _embeddingTensor = TensorAllocator.Rent<T>([vocabularySize, embeddingDimension]);
         InitializeParameters();
 
         // Register trainable parameters for GPU memory optimization
@@ -365,12 +365,14 @@ public partial class EmbeddingLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>, I
         // Initialize embedding tensor with small random values using Engine operations
         T scale = NumOps.Sqrt(NumericalStabilityHelper.SafeDiv(NumOps.FromDouble(1.0), NumOps.FromDouble(embeddingDim)));
 
-        // Create random tensor [0, 1], shift to [-0.5, 0.5], then scale
-        var randomTensor = Tensor<T>.CreateRandom(vocabSize, embeddingDim);
-        var halfTensor = new Tensor<T>([vocabSize, embeddingDim]);
+        // Initialize in-place: random [0,1] → shift to [-0.5, 0.5] → scale
+        // Uses in-place ops to avoid 3 temporary full-size tensor allocations
+        _embeddingTensor = Tensor<T>.CreateRandom(vocabSize, embeddingDim);
+        var halfTensor = TensorAllocator.Rent<T>([vocabSize, embeddingDim]);
         halfTensor.Fill(NumOps.FromDouble(0.5));
-        var shifted = Engine.TensorSubtract(randomTensor, halfTensor);
-        _embeddingTensor = Engine.TensorMultiplyScalar(shifted, scale);
+        Engine.TensorSubtractInPlace(_embeddingTensor, halfTensor);
+        TensorAllocator.Return(halfTensor);
+        Engine.TensorMultiplyScalarInPlace(_embeddingTensor, scale);
     }
 
     /// <summary>
@@ -444,7 +446,7 @@ public partial class EmbeddingLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>, I
             // Create projection weights if needed (lazy initialization)
             if (_projectionWeights == null || _projectionWeights.Shape[0] != inputFeatures)
             {
-                _projectionWeights = new Tensor<T>([inputFeatures, embeddingDim]);
+                _projectionWeights = TensorAllocator.Rent<T>([inputFeatures, embeddingDim]);
                 // Xavier initialization
                 T scale = NumOps.FromDouble(Math.Sqrt(2.0 / (inputFeatures + embeddingDim)));
                 var random = RandomHelper.CreateSecureRandom();
@@ -456,7 +458,7 @@ public partial class EmbeddingLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>, I
 
             // Flatten input to 2D [total_samples, inputFeatures] for projection
             int totalSamples = input.Length / inputFeatures;
-            var input2D = input.Reshape([totalSamples, inputFeatures]);
+            var input2D = Engine.Reshape(input, [totalSamples, inputFeatures]);
             flatOutput = input2D.MatrixMultiply(_projectionWeights);
         }
         else
@@ -516,7 +518,7 @@ public partial class EmbeddingLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>, I
             outputShape[^1] = embeddingDim;
         }
 
-        return flatOutput.Reshape(outputShape);
+        return Engine.Reshape(flatOutput, outputShape);
     }
 
     /// <summary>
@@ -581,7 +583,7 @@ public partial class EmbeddingLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>, I
             // Create projection weights if needed (lazy initialization)
             if (_projectionWeights == null || _projectionWeights.Shape[0] != inputFeatures)
             {
-                _projectionWeights = new Tensor<T>([inputFeatures, embeddingDim]);
+                _projectionWeights = TensorAllocator.Rent<T>([inputFeatures, embeddingDim]);
                 // Xavier initialization
                 T scale = NumOps.FromDouble(Math.Sqrt(2.0 / (inputFeatures + embeddingDim)));
                 var random = RandomHelper.CreateSecureRandom();
@@ -660,30 +662,6 @@ public partial class EmbeddingLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>, I
         }
 
         return false;
-    }
-
-    private Tensor<T> BackwardContinuous(Tensor<T> outputGradient)
-    {
-        if (_lastInput == null || _projectionWeights == null)
-            throw new InvalidOperationException("Forward pass must be called before backward pass.");
-
-        int inputFeatures = _projectionWeights.Shape[0];
-        int embeddingDim = _projectionWeights.Shape[1];
-        int totalSamples = outputGradient.Length / embeddingDim;
-
-        var input2D = _lastInput.Length == inputFeatures
-            ? _lastInput.Reshape([1, inputFeatures])
-            : _lastInput.Reshape([_lastInput.Length / inputFeatures, inputFeatures]);
-        var grad2D = outputGradient.Reshape([totalSamples, embeddingDim]);
-
-        var input2DTransposed = Engine.TensorTranspose(input2D);
-        _projectionWeightsGradient = Engine.TensorMatMul(input2DTransposed, grad2D);
-
-        var projectionWeightsTransposed = Engine.TensorTranspose(_projectionWeights);
-        var inputGrad2D = Engine.TensorMatMul(grad2D, projectionWeightsTransposed);
-
-        _embeddingGradient = null;
-        return inputGrad2D.Reshape(_originalInputShape);
     }
 
     /// <summary>
@@ -765,14 +743,14 @@ public partial class EmbeddingLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>, I
     /// </remarks>
     public override Vector<T> GetParameters()
     {
-        // Use ToArray() for production-grade parameter extraction
-        var embeddingParams = new Vector<T>(_embeddingTensor.ToArray());
+        // Bulk copy from contiguous tensor storage — avoids ToArray() double-copy
+        var embeddingParams = Vector<T>.FromMemory(_embeddingTensor.Data);
         if (_projectionWeights == null)
         {
             return embeddingParams;
         }
 
-        var projectionParams = new Vector<T>(_projectionWeights.ToArray());
+        var projectionParams = Vector<T>.FromMemory(_projectionWeights.Data);
         return Vector<T>.Concatenate(embeddingParams, projectionParams);
     }
 
@@ -1016,7 +994,7 @@ public partial class EmbeddingLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>, I
         {
             // Return zeros for embedding params + actual projection gradients
             var embZeros = new Vector<T>(embeddingParamCount);
-            var projGrad = new Vector<T>(_projectionWeightsGradient.ToArray());
+            var projGrad = Vector<T>.FromMemory(_projectionWeightsGradient.Data);
             return Vector<T>.Concatenate(embZeros, projGrad);
         }
 
@@ -1025,10 +1003,11 @@ public partial class EmbeddingLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>, I
             return new Vector<T>(ParameterCount);
 
         // Discrete embedding mode: return embedding gradients (+ projection if present)
-        var embGrad = new Vector<T>(_embeddingGradient.ToArray());
+        // Bulk copy from contiguous tensor storage — avoids ToArray() double-copy
+        var embGrad = Vector<T>.FromMemory(_embeddingGradient.Data);
         if (_projectionWeightsGradient == null || _projectionWeights == null)
             return embGrad;
-        return Vector<T>.Concatenate(embGrad, new Vector<T>(_projectionWeightsGradient.ToArray()));
+        return Vector<T>.Concatenate(embGrad, Vector<T>.FromMemory(_projectionWeightsGradient.Data));
     }
 
     public override void ClearGradients()

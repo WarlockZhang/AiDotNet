@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -17,9 +19,11 @@ public abstract class SparseCategoricalLossTestBase
     // INVARIANT 1: Loss is finite for valid inputs
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_ShouldBeFinite()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         // 4-class problem, single sample with class index 2
         var predicted = new Vector<double>(new[] { 0.1, 0.2, 0.6, 0.1 });
@@ -35,9 +39,11 @@ public abstract class SparseCategoricalLossTestBase
     // INVARIANT 2: Loss is non-negative
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_ShouldBeNonNegative()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_ShouldBeNonNegative()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var predicted = new Vector<double>(new[] { 0.1, 0.2, 0.6, 0.1 });
         var actual = new Vector<double>(new[] { 2.0 });
@@ -51,9 +57,11 @@ public abstract class SparseCategoricalLossTestBase
     // INVARIANT 3: Higher probability at correct class → lower loss
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_HigherConfidence_ShouldReduceLoss()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_HigherConfidence_ShouldReduceLoss()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var actual = new Vector<double>(new[] { 1.0 }); // class 1
 
@@ -71,9 +79,11 @@ public abstract class SparseCategoricalLossTestBase
     // INVARIANT 4: Perfect prediction → near-zero loss
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_PerfectPrediction_ShouldBeNearZero()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_PerfectPrediction_ShouldBeNearZero()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         // Near-perfect prediction (can't use exactly 1.0 due to log)
         var predicted = new Vector<double>(new[] { 0.001, 0.998, 0.001 });
@@ -88,9 +98,11 @@ public abstract class SparseCategoricalLossTestBase
     // INVARIANT 5: Derivative is finite
     // =========================================================================
 
-    [Fact]
-    public void CalculateDerivative_ShouldBeFinite()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateDerivative_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var predicted = new Vector<double>(new[] { 0.1, 0.2, 0.6, 0.1 });
         var actual = new Vector<double>(new[] { 2.0 });
@@ -109,9 +121,11 @@ public abstract class SparseCategoricalLossTestBase
     // INVARIANT 6: Gradient at correct class should be negative (push probability up)
     // =========================================================================
 
-    [Fact]
-    public void CalculateDerivative_CorrectClass_ShouldBeNegative()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateDerivative_CorrectClass_ShouldBeNegative()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var predicted = new Vector<double>(new[] { 0.3, 0.4, 0.3 });
         var actual = new Vector<double>(new[] { 1.0 }); // class 1
@@ -127,9 +141,11 @@ public abstract class SparseCategoricalLossTestBase
     // INVARIANT 7: Invalid class index should throw
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_InvalidClassIndex_ShouldThrow()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_InvalidClassIndex_ShouldThrow()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var predicted = new Vector<double>(new[] { 0.5, 0.5 });
         var actual = new Vector<double>(new[] { 5.0 }); // out of bounds
@@ -141,9 +157,11 @@ public abstract class SparseCategoricalLossTestBase
     // INVARIANT 8: Multiple samples in batch
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_BatchInput_ShouldBeFinite()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_BatchInput_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var predicted = new Vector<double>(new[] { 0.2, 0.3, 0.5 });
         var actual = new Vector<double>(new[] { 0.0, 2.0, 1.0 }); // batch of 3 samples

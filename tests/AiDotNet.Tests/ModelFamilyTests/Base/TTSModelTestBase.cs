@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -18,9 +20,11 @@ public abstract class TTSModelTestBase : NeuralNetworkModelTestBase
     // A TTS model ignoring its text conditioning is broken.
     // =====================================================
 
-    [Fact]
-    public void DifferentText_DifferentAudio()
+    [Fact(Timeout = 120000)]
+    public async Task DifferentText_DifferentAudio()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
 
         var text1 = CreateConstantTensor(InputShape, 0.2);
@@ -48,9 +52,11 @@ public abstract class TTSModelTestBase : NeuralNetworkModelTestBase
     // TTS models must produce audio output of positive length.
     // =====================================================
 
-    [Fact]
-    public void Output_ShouldBeNonEmpty()
+    [Fact(Timeout = 120000)]
+    public async Task Output_ShouldBeNonEmpty()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -66,9 +72,11 @@ public abstract class TTSModelTestBase : NeuralNetworkModelTestBase
     // Extreme values produce clipping or distortion.
     // =====================================================
 
-    [Fact]
-    public void OutputValues_ShouldBeBounded()
+    [Fact(Timeout = 120000)]
+    public async Task OutputValues_ShouldBeBounded()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -91,9 +99,11 @@ public abstract class TTSModelTestBase : NeuralNetworkModelTestBase
     // A TTS model with high variance is unstable.
     // =====================================================
 
-    [Fact]
-    public void SpeakerConsistency()
+    [Fact(Timeout = 120000)]
+    public async Task SpeakerConsistency()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

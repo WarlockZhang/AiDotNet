@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -38,9 +40,11 @@ public abstract class ClusteringModelTestBase
     // ARI = 0 means random; ARI < 0 means anti-correlated.
     // =====================================================
 
-    [Fact]
-    public void AdjustedRandIndex_ShouldBePositive()
+    [Fact(Timeout = 60000)]
+    public async Task AdjustedRandIndex_ShouldBePositive()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
@@ -63,9 +67,11 @@ public abstract class ClusteringModelTestBase
     // Classification's "Accuracy_ShouldBeHigh_OnPerfectlySeparableData".
     // =====================================================
 
-    [Fact]
-    public void IntraClusterPurity_ShouldBeHigh_OnSeparableData()
+    [Fact(Timeout = 60000)]
+    public async Task IntraClusterPurity_ShouldBeHigh_OnSeparableData()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
@@ -111,9 +117,11 @@ public abstract class ClusteringModelTestBase
     // Mirrors Classification's "MoreData_ShouldNotDegrade_Accuracy".
     // =====================================================
 
-    [Fact]
-    public void MoreData_ShouldNotDegrade_ClusterQuality()
+    [Fact(Timeout = 60000)]
+    public async Task MoreData_ShouldNotDegrade_ClusterQuality()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng1 = ModelTestHelpers.CreateSeededRandom(42);
         var model1 = CreateModel();
         var (trainX1, trainY1) = GenerateData(30, NumClusters, Features, rng1);
@@ -144,9 +152,11 @@ public abstract class ClusteringModelTestBase
     // cluster structure. Mirrors Classification's IrrelevantFeature test.
     // =====================================================
 
-    [Fact]
-    public void IrrelevantFeature_ShouldNotDegrade_ClusterQuality()
+    [Fact(Timeout = 60000)]
+    public async Task IrrelevantFeature_ShouldNotDegrade_ClusterQuality()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng1 = ModelTestHelpers.CreateSeededRandom(42);
         var rng2 = ModelTestHelpers.CreateSeededRandom(42);
         var model1 = CreateModel();
@@ -187,9 +197,11 @@ public abstract class ClusteringModelTestBase
     // SAME cluster assignments. Cluster structure is relative, not absolute.
     // =====================================================
 
-    [Fact]
-    public void TranslationEquivariance_ShiftingPoints_PreservesAssignments()
+    [Fact(Timeout = 60000)]
+    public async Task TranslationEquivariance_ShiftingPoints_PreservesAssignments()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng1 = ModelTestHelpers.CreateSeededRandom(42);
         var rng2 = ModelTestHelpers.CreateSeededRandom(42);
         var model1 = CreateModel();
@@ -224,9 +236,11 @@ public abstract class ClusteringModelTestBase
     // Scaling all features by same constant should preserve assignments.
     // =====================================================
 
-    [Fact]
-    public void UniformScaling_ShouldPreserveAssignments()
+    [Fact(Timeout = 60000)]
+    public async Task UniformScaling_ShouldPreserveAssignments()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng1 = ModelTestHelpers.CreateSeededRandom(42);
         var rng2 = ModelTestHelpers.CreateSeededRandom(42);
         var model1 = CreateModel();
@@ -260,9 +274,11 @@ public abstract class ClusteringModelTestBase
     // The mean of points in each cluster should be near a generation center.
     // =====================================================
 
-    [Fact]
-    public void ClusterMeans_ShouldBeNearGenerationCenters()
+    [Fact(Timeout = 60000)]
+    public async Task ClusterMeans_ShouldBeNearGenerationCenters()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
@@ -317,9 +333,11 @@ public abstract class ClusteringModelTestBase
     // MATHEMATICAL INVARIANT: Correct Number of Distinct Clusters
     // =====================================================
 
-    [Fact]
-    public void DistinctClusters_ShouldBeReasonable()
+    [Fact(Timeout = 60000)]
+    public async Task DistinctClusters_ShouldBeReasonable()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
@@ -342,9 +360,11 @@ public abstract class ClusteringModelTestBase
     // MATHEMATICAL INVARIANT: Identical Points → Same Cluster
     // =====================================================
 
-    [Fact]
-    public void IdenticalPoints_ShouldGetSameCluster()
+    [Fact(Timeout = 60000)]
+    public async Task IdenticalPoints_ShouldGetSameCluster()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
@@ -366,9 +386,11 @@ public abstract class ClusteringModelTestBase
     // MATHEMATICAL INVARIANT: Predictions Are Finite
     // =====================================================
 
-    [Fact]
-    public void Predictions_ShouldBeFinite()
+    [Fact(Timeout = 60000)]
+    public async Task Predictions_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
@@ -387,9 +409,11 @@ public abstract class ClusteringModelTestBase
     // BASIC CONTRACTS: Determinism, Output Shape, Clone, Metadata, Parameters
     // =====================================================
 
-    [Fact]
-    public void Predict_ShouldBeDeterministic()
+    [Fact(Timeout = 60000)]
+    public async Task Predict_ShouldBeDeterministic()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
@@ -402,9 +426,11 @@ public abstract class ClusteringModelTestBase
             Assert.Equal(a1[i], a2[i]);
     }
 
-    [Fact]
-    public void OutputDimension_ShouldMatchInputRows()
+    [Fact(Timeout = 60000)]
+    public async Task OutputDimension_ShouldMatchInputRows()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
@@ -414,9 +440,11 @@ public abstract class ClusteringModelTestBase
         Assert.Equal(TestSamples, model.Predict(testX).Length);
     }
 
-    [Fact]
-    public void Clone_ShouldProduceIdenticalAssignments()
+    [Fact(Timeout = 60000)]
+    public async Task Clone_ShouldProduceIdenticalAssignments()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
@@ -430,9 +458,11 @@ public abstract class ClusteringModelTestBase
             Assert.Equal(a1[i], a2[i]);
     }
 
-    [Fact]
-    public void Metadata_ShouldExistAfterTraining()
+    [Fact(Timeout = 60000)]
+    public async Task Metadata_ShouldExistAfterTraining()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
@@ -441,9 +471,11 @@ public abstract class ClusteringModelTestBase
         Assert.NotNull(model.GetModelMetadata());
     }
 
-    [Fact]
-    public void Parameters_ShouldBeNonEmpty_AfterTraining()
+    [Fact(Timeout = 60000)]
+    public async Task Parameters_ShouldBeNonEmpty_AfterTraining()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         if (!HasFlatParameters) return;
 
         var rng = ModelTestHelpers.CreateSeededRandom();
@@ -469,9 +501,11 @@ public abstract class ClusteringModelTestBase
     protected virtual IFullModel<double, Matrix<double>, Vector<double>> CreateSingleClusterModel()
         => CreateModel();
 
-    [Fact]
-    public void SingleClusterData_ShouldAssignSameCluster()
+    [Fact(Timeout = 60000)]
+    public async Task SingleClusterData_ShouldAssignSameCluster()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateSingleClusterModel();
 
@@ -506,9 +540,11 @@ public abstract class ClusteringModelTestBase
     // Shuffling row order should produce equivalent cluster assignments.
     // =====================================================
 
-    [Fact]
-    public void PermutationInvariance_ShuffledRows_SameAssignments()
+    [Fact(Timeout = 60000)]
+    public async Task PermutationInvariance_ShuffledRows_SameAssignments()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng1 = ModelTestHelpers.CreateSeededRandom(42);
         var rng2 = ModelTestHelpers.CreateSeededRandom(42);
         var model1 = CreateModel();
@@ -537,9 +573,11 @@ public abstract class ClusteringModelTestBase
     // INTEGRATION: Builder Pipeline
     // =====================================================
 
-    [Fact]
-    public void Builder_ShouldProduceResult()
+    [Fact(Timeout = 60000)]
+    public async Task Builder_ShouldProduceResult()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
         var loader = AiDotNet.Data.Loaders.DataLoaders.FromMatrixVector(trainX, trainY);
@@ -554,9 +592,11 @@ public abstract class ClusteringModelTestBase
         Assert.NotNull(result);
     }
 
-    [Fact]
-    public void Builder_ClusteringShouldBeatRandom()
+    [Fact(Timeout = 60000)]
+    public async Task Builder_ClusteringShouldBeatRandom()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var (trainX, trainY) = GenerateData(TrainSamples, NumClusters, Features, rng);
         var loader = AiDotNet.Data.Loaders.DataLoaders.FromMatrixVector(trainX, trainY);

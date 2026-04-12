@@ -665,26 +665,15 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
         writer.Write(Stride);
         writer.Write(Padding);
 
-        // Serialize _kernels
-        for (int i = 0; i < _kernels.Shape[0]; i++)
-        {
-            for (int j = 0; j < _kernels.Shape[1]; j++)
-            {
-                for (int k = 0; k < _kernels.Shape[2]; k++)
-                {
-                    for (int l = 0; l < _kernels.Shape[3]; l++)
-                    {
-                        writer.Write(Convert.ToDouble(_kernels[i, j, k, l]));
-                    }
-                }
-            }
-        }
+        // Serialize _kernels — flat span iteration replaces 4-nested indexing loops
+        var kernelSpan = _kernels.Data.Span;
+        for (int i = 0; i < kernelSpan.Length; i++)
+            writer.Write(Convert.ToDouble(kernelSpan[i]));
 
-        // Serialize _biases
-        for (int i = 0; i < _biases.Shape[0]; i++)
-        {
-            writer.Write(Convert.ToDouble(_biases[i]));
-        }
+        // Serialize _biases — flat span iteration
+        var biasSpan = _biases.Data.Span;
+        for (int i = 0; i < biasSpan.Length; i++)
+            writer.Write(Convert.ToDouble(biasSpan[i]));
     }
 
     /// <summary>
@@ -721,30 +710,17 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
         Stride = reader.ReadInt32();
         Padding = reader.ReadInt32();
 
-        // Deserialize _kernels — RentUninitialized since all elements are immediately overwritten
+        // Deserialize _kernels — flat span iteration replaces 4-nested indexing loops
         _kernels = TensorAllocator.RentUninitialized<T>([OutputDepth, InputDepth, KernelSize, KernelSize]);
-        for (int i = 0; i < _kernels.Shape[0]; i++)
-        {
-            for (int j = 0; j < _kernels.Shape[1]; j++)
-            {
-                for (int k = 0; k < _kernels.Shape[2]; k++)
-                {
-                    for (int l = 0; l < _kernels.Shape[3]; l++)
-                    {
-                        double value = reader.ReadDouble();
-                        _kernels[i, j, k, l] = NumOps.FromDouble(value);
-                    }
-                }
-            }
-        }
+        var kernelSpan = _kernels.Data.Span;
+        for (int i = 0; i < kernelSpan.Length; i++)
+            kernelSpan[i] = NumOps.FromDouble(reader.ReadDouble());
 
-        // Deserialize _biases
+        // Deserialize _biases — flat span iteration
         _biases = new Tensor<T>([OutputDepth]);
-        for (int i = 0; i < _biases.Shape[0]; i++)
-        {
-            double value = reader.ReadDouble();
-            _biases[i] = NumOps.FromDouble(value);
-        }
+        var biasSpan = _biases.Data.Span;
+        for (int i = 0; i < biasSpan.Length; i++)
+            biasSpan[i] = NumOps.FromDouble(reader.ReadDouble());
 
         // Reinitialize _lastInput and _lastOutput
         _lastInput = new Tensor<T>([OutputDepth, InputDepth, KernelSize, KernelSize]);
@@ -901,7 +877,7 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
         {
             // 3D [C, H, W] -> 4D [1, C, H, W]
             _addedBatchDimension = true;
-            input4D = input.Reshape(1, input.Shape[0], input.Shape[1], input.Shape[2]);
+            input4D = Engine.Reshape(input, [1, input.Shape[0], input.Shape[1], input.Shape[2]]);
         }
         else if (rank == 4)
         {
@@ -916,7 +892,7 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
             int flatBatch = 1;
             for (int d = 0; d < rank - 3; d++)
                 flatBatch *= input.Shape[d];
-            input4D = input.Reshape(flatBatch, input.Shape[rank - 3], input.Shape[rank - 2], input.Shape[rank - 1]);
+            input4D = Engine.Reshape(input, [flatBatch, input.Shape[rank - 3], input.Shape[rank - 2], input.Shape[rank - 1]]);
         }
 
         // Validate input channels
@@ -952,17 +928,41 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
         {
             // Single fused call: output = activation(conv(input, kernel) + bias)
             // Reshape bias to [1, C, 1, 1] for proper broadcasting with conv output [B, C, H, W]
-            _biasReshaped4D ??= _biases.Reshape([1, OutputDepth, 1, 1]);
+            _biasReshaped4D ??= Engine.Reshape(_biases, [1, OutputDepth, 1, 1]);
             result = Engine.FusedConv2D(_lastInput, _kernels, _biasReshaped4D,
                 Stride, Stride, Padding, Padding, 1, 1, fusedActivation);
         }
+        else if (AiDotNet.Tensors.Engines.Autodiff.GradientTape<T>.Current is not null
+                 && !AiDotNet.Tensors.Engines.Autodiff.NoGradScope<T>.IsSuppressed)
+        {
+            // Tape-tracked path: zero-alloc Into/InPlace variants bypass the gradient
+            // tape, so while a tape is active we must use the non-in-place Engine ops
+            // (Conv2D + TensorBroadcastAdd) so the backward pass can follow the
+            // gradient chain back to the kernel and bias tensors.
+            //
+            // Check the tape directly rather than IsTrainingMode because not every
+            // caller flips IsTrainingMode before invoking the forward pass —
+            // DiffusionModelBase.Train opens a GradientTape without ever calling
+            // SetTrainingMode, which caused this branch to be silently skipped.
+            //
+            // CRITICAL: reshape the bias fresh each training step instead of reusing
+            // the _biasReshaped4D cache. The cache is typically primed during the
+            // first Predict call (under NoGradScope) and holds a reshape tensor
+            // with no GradFn pointing back to _biases. Reusing that cached handle
+            // would make the gradient walk hit a dead end at _biasReshaped4D,
+            // leaving _biases with zero gradient on every training step.
+            var conv = Engine.Conv2D(_lastInput, _kernels, Stride, Padding, dilation: 1);
+            var biasReshapedForTape = Engine.Reshape(_biases, [1, OutputDepth, 1, 1]);
+            result = Engine.TensorBroadcastAdd(conv, biasReshapedForTape);
+        }
         else
         {
-            // Fallback: separate Conv2DInto + in-place bias + activation
+            // Inference fast path: separate Conv2DInto + in-place bias + activation.
+            // Safe because no tape is active during inference (NoGradScope).
             Engine.Conv2DInto(_preAllocatedOutput, _lastInput, _kernels, Stride, Padding, dilation: 1);
             var output = _preAllocatedOutput;
 
-            _biasReshaped4D ??= _biases.Reshape([1, OutputDepth, 1, 1]);
+            _biasReshaped4D ??= Engine.Reshape(_biases, [1, OutputDepth, 1, 1]);
             Engine.TensorBroadcastAddInPlace(output, _biasReshaped4D);
 
             result = ApplyActivation(output);
@@ -984,13 +984,13 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
             outputShape[_originalInputShape.Length - 3] = OutputDepth;
             outputShape[_originalInputShape.Length - 2] = result.Shape[2];
             outputShape[_originalInputShape.Length - 1] = result.Shape[3];
-            return result.Reshape(outputShape);
+            return Engine.Reshape(result, outputShape);
         }
         if (_addedBatchDimension)
         {
             // Input was 3D [C, H, W], output should also be 3D [OutC, OutH, OutW]
             // Remove the batch dimension we added
-            return result.Reshape([OutputDepth, result.Shape[2], result.Shape[3]]);
+            return Engine.Reshape(result, [OutputDepth, result.Shape[2], result.Shape[3]]);
         }
 
         return result;
@@ -1041,7 +1041,7 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
         {
             // 3D [C, H, W] -> 4D [1, C, H, W]
             _addedBatchDimension = true;
-            input4D = input.Reshape([1, input.Shape[0], input.Shape[1], input.Shape[2]]);
+            input4D = Engine.Reshape(input, [1, input.Shape[0], input.Shape[1], input.Shape[2]]);
         }
         else if (rank == 4)
         {
@@ -1058,7 +1058,7 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
             {
                 flatBatch *= input.Shape[d];
             }
-            input4D = input.Reshape([flatBatch, input.Shape[rank - 3], input.Shape[rank - 2], input.Shape[rank - 1]]);
+            input4D = Engine.Reshape(input, [flatBatch, input.Shape[rank - 3], input.Shape[rank - 2], input.Shape[rank - 1]]);
         }
 
         // Validate input channels
@@ -1107,13 +1107,13 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
             outputShape[_originalInputShape.Length - 3] = OutputDepth;
             outputShape[_originalInputShape.Length - 2] = result.Shape[2];
             outputShape[_originalInputShape.Length - 1] = result.Shape[3];
-            return result.Reshape(outputShape);
+            return Engine.Reshape(result, outputShape);
         }
 
         if (_addedBatchDimension)
         {
             // Input was 3D [C, H, W], output should also be 3D [OutC, OutH, OutW]
-            return result.Reshape([OutputDepth, result.Shape[2], result.Shape[3]]);
+            return Engine.Reshape(result, [OutputDepth, result.Shape[2], result.Shape[3]]);
         }
 
         return result;
@@ -1144,7 +1144,7 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
         };
 
         // Reshape back to 4D
-        return flatResult.Reshape(gradOutput.Shape.ToArray());
+        return flatResult.Reshape(gradOutput._shape);
     }
 
     /// <summary>
@@ -1273,34 +1273,10 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
     /// <inheritdoc/>
     public override Vector<T> GetParameters()
     {
-        // Calculate total number of parameters
-        int totalParams = _kernels.Length + _biases.Shape[0];
-        var parameters = new Vector<T>(totalParams);
-
-        int index = 0;
-
-        // Copy kernel parameters
-        for (int o = 0; o < OutputDepth; o++)
-        {
-            for (int i = 0; i < InputDepth; i++)
-            {
-                for (int ky = 0; ky < KernelSize; ky++)
-                {
-                    for (int kx = 0; kx < KernelSize; kx++)
-                    {
-                        parameters[index++] = _kernels[o, i, ky, kx];
-                    }
-                }
-            }
-        }
-
-        // Copy bias parameters
-        for (int o = 0; o < OutputDepth; o++)
-        {
-            parameters[index++] = _biases[o];
-        }
-
-        return parameters;
+        // Bulk copy from contiguous tensor storage — replaces 4-nested scalar loops
+        return Vector<T>.Concatenate(
+            Vector<T>.FromMemory(_kernels.Data),
+            Vector<T>.FromMemory(_biases.Data));
     }
 
     /// <summary>
@@ -1316,39 +1292,16 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
     /// <returns>A vector containing all parameter gradients (kernel gradients followed by bias gradients).</returns>
     public override Vector<T> GetParameterGradients()
     {
-        int totalParams = _kernels.Length + _biases.Shape[0];
-        var gradients = new Vector<T>(totalParams);
-
         // If gradients haven't been computed yet, return zero gradients
         if (_kernelsGradient == null || _biasesGradient == null)
         {
-            return gradients;
+            return new Vector<T>(ParameterCount);
         }
 
-        int index = 0;
-
-        // Copy kernel gradients in the same order as GetParameters
-        for (int o = 0; o < OutputDepth; o++)
-        {
-            for (int i = 0; i < InputDepth; i++)
-            {
-                for (int ky = 0; ky < KernelSize; ky++)
-                {
-                    for (int kx = 0; kx < KernelSize; kx++)
-                    {
-                        gradients[index++] = _kernelsGradient[o, i, ky, kx];
-                    }
-                }
-            }
-        }
-
-        // Copy bias gradients
-        for (int o = 0; o < OutputDepth; o++)
-        {
-            gradients[index++] = _biasesGradient[o];
-        }
-
-        return gradients;
+        // Bulk copy from contiguous tensor storage — replaces 4-nested scalar loops
+        return Vector<T>.Concatenate(
+            Vector<T>.FromMemory(_kernelsGradient.Data),
+            Vector<T>.FromMemory(_biasesGradient.Data));
     }
 
     /// <summary>
@@ -1377,33 +1330,18 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
     /// </remarks>
     public override void SetParameters(Vector<T> parameters)
     {
-        if (parameters.Length != _kernels.Length + _biases.Shape[0])
+        int kernelLen = _kernels.Length;
+        int biasLen = _biases.Shape[0];
+        if (parameters.Length != kernelLen + biasLen)
         {
-            throw new ArgumentException($"Expected {_kernels.Length + _biases.Shape[0]} parameters, but got {parameters.Length}");
+            throw new ArgumentException($"Expected {kernelLen + biasLen} parameters, but got {parameters.Length}");
         }
 
-        int index = 0;
-
-        // Set kernel parameters
-        for (int o = 0; o < OutputDepth; o++)
-        {
-            for (int i = 0; i < InputDepth; i++)
-            {
-                for (int ky = 0; ky < KernelSize; ky++)
-                {
-                    for (int kx = 0; kx < KernelSize; kx++)
-                    {
-                        _kernels[o, i, ky, kx] = parameters[index++];
-                    }
-                }
-            }
-        }
-
-        // Set bias parameters
-        for (int o = 0; o < OutputDepth; o++)
-        {
-            _biases[o] = parameters[index++];
-        }
+        // Bulk copy into contiguous tensor storage in-place — replaces 4-nested scalar loops
+        // Preserves tensor identity so engine persistent tensor references remain valid
+        var src = parameters.AsSpan();
+        src.Slice(0, kernelLen).CopyTo(_kernels.Data.Span);
+        src.Slice(kernelLen, biasLen).CopyTo(_biases.Data.Span);
 
         // Notify engine that parameters have changed (for GPU cache invalidation)
         Engine.InvalidatePersistentTensor(_kernels);

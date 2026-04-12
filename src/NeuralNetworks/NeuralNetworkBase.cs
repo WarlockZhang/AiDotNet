@@ -2454,19 +2454,29 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
 
             var loss = LossFunction as LossFunctions.LossFunctionBase<T>
                 ?? throw new InvalidOperationException("LossFunction must derive from LossFunctionBase<T> for tape-based training.");
-            // Forward + loss under tape — uses the buffer-backed view tensors
+
+            // Activate a TensorArena for the forward/backward/update scope.
+            // After the first iteration warms the arena, ALL subsequent TensorAllocator.Rent
+            // calls reuse pooled arrays — zero GC allocation in the training hot loop.
+            // The arena is thread-static and resets on Dispose, so intermediate tensors
+            // (conv outputs, attention scores, gradient buffers) are recycled every iteration.
+            using var arena = TensorArena.Create();
             using var tape = new GradientTape<T>();
             var output = ForwardForTraining(input);
 
             // Align output shape to target: squeeze leading batch dim when batch=1
-            // (ForwardForTraining may add a batch dim that the target doesn't have)
+            // (ForwardForTraining may add a batch dim that the target doesn't have).
+            // Must go through Engine so the gradient tape records the reshape —
+            // direct Tensor<T>.Reshape bypasses the tape and breaks backward flow
+            // between ForwardForTraining and the loss. Use the internal _shape
+            // field (zero-alloc) rather than Shape.ToArray().
             if (output.Rank > expected.Rank && output.Shape[0] == 1 && output.Length == expected.Length)
             {
-                output = output.Reshape(expected._shape);
+                output = Engine.Reshape(output, expected._shape);
             }
             else if (expected.Rank > output.Rank && expected.Shape[0] == 1 && expected.Length == output.Length)
             {
-                expected = expected.Reshape(output._shape);
+                expected = Engine.Reshape(expected, output._shape);
             }
 
             var lossTensor = loss.ComputeTapeLoss(output, expected);
@@ -2490,12 +2500,14 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             // Resolve optimizer
             var opt = optimizer ?? GetOrCreateBaseOptimizer();
 
-            // Re-evaluation callback applies same shape alignment as initial forward
+            // Re-evaluation callback applies same shape alignment as initial forward.
+            // Engine.Reshape so the tape records the reshape when this is called
+            // inside the optimizer's Step; also zero-alloc via the _shape field.
             Tensor<T> ComputeForward(Tensor<T> inp, Tensor<T> tgt)
             {
                 var fwd = ForwardForTraining(inp);
                 if (fwd.Rank > tgt.Rank && fwd.Shape[0] == 1 && fwd.Length == tgt.Length)
-                    fwd = fwd.Reshape(tgt._shape);
+                    fwd = Engine.Reshape(fwd, tgt._shape);
                 return fwd;
             }
 
@@ -2577,7 +2589,7 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     /// Gets or lazily creates the default optimizer for tape-based training.
     /// Used when a network doesn't provide its own optimizer.
     /// </summary>
-    private IGradientBasedOptimizer<T, Tensor<T>, Tensor<T>> GetOrCreateBaseOptimizer()
+    protected IGradientBasedOptimizer<T, Tensor<T>, Tensor<T>> GetOrCreateBaseOptimizer()
     {
         return _baseTrainOptimizer ??= new AdamOptimizer<T, Tensor<T>, Tensor<T>>(this);
     }
@@ -2723,24 +2735,42 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
 
         // For each layer, copy updated data from the current (view) tensors
         // back to the saved original tensors, then restore the originals.
+        bool anyStructureChanged = false;
         foreach (var (layer, originals) in _savedOriginalParameters)
         {
             if (layer is ITrainableLayer<T> trainable)
             {
                 var currentViews = trainable.GetTrainableParameters();
+
+                // If parameter count or sizes changed (e.g., DenseLayer lazy initialization
+                // resized weights during the first forward pass), skip restoration for this
+                // layer — the pre-init parameters are meaningless and the layer now has the
+                // correct shape for the actual input data.
                 if (currentViews.Count != originals.Count)
-                    throw new InvalidOperationException(
-                        $"Parameter count changed during training step: expected {originals.Count}, got {currentViews.Count}.");
+                {
+                    anyStructureChanged = true;
+                    continue;
+                }
+
+                bool sizeChanged = false;
+                for (int i = 0; i < originals.Count; i++)
+                {
+                    if (currentViews[i].Length != originals[i].Length)
+                    {
+                        sizeChanged = true;
+                        break;
+                    }
+                }
+                if (sizeChanged)
+                {
+                    anyStructureChanged = true;
+                    continue;
+                }
 
                 for (int i = 0; i < originals.Count; i++)
                 {
-                    var view = currentViews[i];
-                    var orig = originals[i];
-                    if (view.Length != orig.Length)
-                        throw new InvalidOperationException(
-                            $"Parameter {i} size changed: expected {orig.Length}, got {view.Length}.");
-                    for (int j = 0; j < view.Length; j++)
-                        orig.SetFlat(j, view.GetFlat(j));
+                    // Bulk copy via Engine — zero-alloc, SIMD-accelerated
+                    Engine.TensorCopy(currentViews[i], originals[i]);
                 }
 
                 trainable.SetTrainableParameters(originals);
@@ -2748,10 +2778,16 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
         }
 
         _savedOriginalParameters = null;
-        // Clear buffer so next training step creates fresh views
-        _parameterBuffer = null;
-        // Invalidate the tape parameter cache so next CollectParameters re-walks
-        _layerStructureVersion++;
+
+        // Only invalidate the parameter buffer when layer structure actually changed
+        // (e.g., lazy initialization resized a layer). When structure is stable
+        // (normal training iterations), keep the buffer to avoid O(total_params)
+        // rebuild cost every iteration — critical for large models like VideoCLIP.
+        if (anyStructureChanged)
+        {
+            _parameterBuffer = null;
+            _layerStructureVersion++;
+        }
     }
 
     /// <summary>
@@ -3084,6 +3120,11 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
         // Invalidate caches after loading all layers
         // (InvalidateParameterCountCache already calls InvalidateLayerInfoCache)
         InvalidateParameterCountCache();
+
+        // Deserialized models should be in inference mode by default.
+        // This ensures BatchNorm uses running statistics (not batch statistics)
+        // and dropout is disabled, matching the behavior of the original model.
+        SetTrainingMode(false);
 
         // Read network-specific data
         DeserializeNetworkSpecificData(reader);

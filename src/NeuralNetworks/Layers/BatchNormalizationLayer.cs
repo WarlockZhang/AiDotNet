@@ -362,7 +362,7 @@ public partial class BatchNormalizationLayer<T> : LayerBase<T>, ILayerSerializat
         _inputWas1D = input.Shape.Length == 1;
         if (_inputWas1D)
         {
-            input = input.Reshape(1, input.Length);
+            input = Engine.Reshape(input, [1, input.Length]);
         }
 
         _lastInput = input;
@@ -396,8 +396,8 @@ public partial class BatchNormalizationLayer<T> : LayerBase<T>, ILayerSerializat
                     newVarData[i] = i < copyLen ? batchVariance.Data.Span[i] : varFillValue;
                 }
 
-                batchMean = new Tensor<T>(_runningMean.Shape.ToArray(), new Vector<T>(newMeanData));
-                batchVariance = new Tensor<T>(_runningVariance.Shape.ToArray(), new Vector<T>(newVarData));
+                batchMean = new Tensor<T>(_runningMean._shape, new Vector<T>(newMeanData));
+                batchVariance = new Tensor<T>(_runningVariance._shape, new Vector<T>(newVarData));
             }
 
             // Update running statistics using Exponential Moving Average (Vectorized)
@@ -418,7 +418,7 @@ public partial class BatchNormalizationLayer<T> : LayerBase<T>, ILayerSerializat
             // Preserve original rank
             if (_inputWas1D)
             {
-                output = output.Reshape(output.Length);
+                output = Engine.Reshape(output, [output.Length]);
             }
 
             return output;
@@ -436,7 +436,7 @@ public partial class BatchNormalizationLayer<T> : LayerBase<T>, ILayerSerializat
             // (recomputing creates new tensor allocations that can cause SIMD alignment differences)
             if (_inferenceScaleDirty || _cachedInferenceScale is null || _cachedInferenceShift is null)
             {
-                var epsilonVec = Tensor<T>.CreateDefault(_runningVariance.Shape.ToArray(), _epsilon);
+                var epsilonVec = Tensor<T>.CreateDefault(_runningVariance._shape, _epsilon);
                 var variancePlusEps = Engine.TensorAdd(_runningVariance, epsilonVec);
                 var stdDev = Engine.TensorSqrt(variancePlusEps);
 
@@ -454,7 +454,7 @@ public partial class BatchNormalizationLayer<T> : LayerBase<T>, ILayerSerializat
             // Preserve original rank
             if (_inputWas1D)
             {
-                result = result.Reshape(result.Length);
+                result = Engine.Reshape(result, [result.Length]);
             }
 
             return result;
@@ -470,42 +470,24 @@ public partial class BatchNormalizationLayer<T> : LayerBase<T>, ILayerSerializat
     /// </remarks>
     private Tensor<T> ApplyInferenceAnyRank(Tensor<T> input, Tensor<T> scale, Tensor<T> shift)
     {
-        int batch = input.Shape[0];
-        int channels = input.Shape[1];
+        // Engine-accelerated batch normalization inference:
+        // output = input * scale_broadcast + shift_broadcast
+        // Reshape scale/shift to [1, C, 1, 1, ...] for broadcasting across batch and spatial dims.
+        int rank = input.Shape.Length;
 
-        // Calculate total spatial size (product of all dimensions after batch and channels)
-        int spatialSize = 1;
-        for (int d = 2; d < input.Shape.Length; d++)
-        {
-            spatialSize *= input.Shape[d];
-        }
+        // Build broadcast shape: [1, C, 1, 1, ...]
+        var broadcastShape = new int[rank];
+        broadcastShape[0] = 1;           // batch
+        broadcastShape[1] = scale.Length; // channels
+        for (int d = 2; d < rank; d++)
+            broadcastShape[d] = 1;       // spatial
 
-        var inputData = input.Data.Span;
-        var scaleData = scale.Data.Span;
-        var shiftData = shift.Data.Span;
+        var scaleReshaped = Engine.Reshape(scale, broadcastShape);
+        var shiftReshaped = Engine.Reshape(shift, broadcastShape);
 
-        // Rent output tensor (fully overwritten) and write via Span
-        var output = TensorAllocator.Rent<T>(input._shape);
-        var outputData = output.Data.Span;
-
-        for (int n = 0; n < batch; n++)
-        {
-            for (int c = 0; c < channels; c++)
-            {
-                int batchOffset = n * channels * spatialSize;
-                int channelOffset = c * spatialSize;
-                T scaleC = scaleData[c];
-                T shiftC = shiftData[c];
-
-                for (int s = 0; s < spatialSize; s++)
-                {
-                    int idx = batchOffset + channelOffset + s;
-                    outputData[idx] = NumOps.Add(NumOps.Multiply(inputData[idx], scaleC), shiftC);
-                }
-            }
-        }
-
-        return output;
+        // Engine-accelerated broadcast: tape-tracked + SIMD + GPU-capable
+        var scaled = Engine.TensorBroadcastMultiply(input, scaleReshaped);
+        return Engine.TensorBroadcastAdd(scaled, shiftReshaped);
     }
 
     /// <summary>

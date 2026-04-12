@@ -691,7 +691,7 @@ public partial class GRULayer<T> : LayerBase<T>
             }
             else
             {
-                input3D = input.Reshape([1, sequenceLength, _inputSize]);
+                input3D = Engine.Reshape(input, [1, sequenceLength, _inputSize]);
             }
         }
         else if (rank == 3)
@@ -813,7 +813,7 @@ public partial class GRULayer<T> : LayerBase<T>
             }
             else
             {
-                input3D = input.Reshape([flatBatch, sequenceLength, _inputSize]);
+                input3D = Engine.Reshape(input, [flatBatch, sequenceLength, _inputSize]);
             }
         }
 
@@ -854,15 +854,15 @@ public partial class GRULayer<T> : LayerBase<T>
         for (int t = 0; t < sequenceLength; t++)
         {
             // Extract current time step input: slice axis 1 (sequence) at timestep t
-            var xt = input3D.Slice(1, t, t + 1).Reshape([batchSize, _inputSize]);
+            var xt = Engine.Reshape(input3D.Slice(1, t, t + 1), [batchSize, _inputSize]);
 
             var z = ApplyActivation(Engine.TensorBroadcastAdd(Engine.TensorAdd(Engine.TensorMatMul(xt, WzT), Engine.TensorMatMul(currentHiddenState, UzT)), _bz), true);
             var r = ApplyActivation(Engine.TensorBroadcastAdd(Engine.TensorAdd(Engine.TensorMatMul(xt, WrT), Engine.TensorMatMul(currentHiddenState, UrT)), _br), true);
             var h_candidate = ApplyActivation(Engine.TensorBroadcastAdd(Engine.TensorAdd(Engine.TensorMatMul(xt, WhT), Engine.TensorMatMul(r.ElementwiseMultiply(currentHiddenState), UhT)), _bh), false);
             // Compute (1 - z) using cached ones tensor — avoids per-timestep allocation
-            if (_cachedOnesForGate == null || !_cachedOnesForGate.Shape.ToArray().SequenceEqual(z.Shape.ToArray()))
+            if (_cachedOnesForGate == null || !_cachedOnesForGate._shape.SequenceEqual(z._shape))
             {
-                _cachedOnesForGate = Tensor<T>.CreateDefault(z.Shape.ToArray(), NumOps.One);
+                _cachedOnesForGate = Tensor<T>.CreateDefault(z._shape, NumOps.One);
             }
             var oneMinusZ = Engine.TensorSubtract(_cachedOnesForGate, z);
 
@@ -903,7 +903,7 @@ public partial class GRULayer<T> : LayerBase<T>
         {
             // Each hidden state is [batchSize, hiddenSize]
             // Concatenate along axis 1, then reshape to [batchSize, sequenceLength, hiddenSize]
-            output = Tensor<T>.Concatenate([.. _allHiddenStates], 1).Reshape([batchSize, sequenceLength, _hiddenSize]);
+            output = Engine.Reshape(Engine.TensorConcatenate(_allHiddenStates.ToArray(), axis: 1), [batchSize, sequenceLength, _hiddenSize]);
         }
         else
         {
@@ -931,12 +931,12 @@ public partial class GRULayer<T> : LayerBase<T>
                     newShape[d] = _originalInputShape[d];
                 newShape[_originalInputShape.Length - 2] = _hiddenSize;
             }
-            output = output.Reshape(newShape);
+            output = Engine.Reshape(output, newShape);
         }
         else if (_originalInputShape != null && _originalInputShape.Length == 2 && !_returnSequences)
         {
             // 2D input -> 1D output (remove batch dim)
-            output = output.Reshape([_hiddenSize]);
+            output = Engine.Reshape(output, [_hiddenSize]);
         }
 
         return output;
@@ -1405,38 +1405,33 @@ public partial class GRULayer<T> : LayerBase<T>
 
     public override Vector<T> GetParameters()
     {
+        // Bulk copy from contiguous tensor storage — avoids ToArray() double-copy
         return Vector<T>.Concatenate(
-            new Vector<T>(_Wz.ToArray()),
-            new Vector<T>(_Wr.ToArray()),
-            new Vector<T>(_Wh.ToArray()),
-            new Vector<T>(_Uz.ToArray()),
-            new Vector<T>(_Ur.ToArray()),
-            new Vector<T>(_Uh.ToArray()),
-            new Vector<T>(_bz.ToArray()),
-            new Vector<T>(_br.ToArray()),
-            new Vector<T>(_bh.ToArray())
+            Vector<T>.FromMemory(_Wz.Data),
+            Vector<T>.FromMemory(_Wr.Data),
+            Vector<T>.FromMemory(_Wh.Data),
+            Vector<T>.FromMemory(_Uz.Data),
+            Vector<T>.FromMemory(_Ur.Data),
+            Vector<T>.FromMemory(_Uh.Data),
+            Vector<T>.FromMemory(_bz.Data),
+            Vector<T>.FromMemory(_br.Data),
+            Vector<T>.FromMemory(_bh.Data)
         );
     }
 
     public override void SetParameters(Vector<T> parameters)
     {
+        // Bulk copy from parameter vector into tensor storage — avoids per-element SetFlat calls
         int idx = 0;
-
-        void CopyToTensor(Tensor<T> tensor)
-        {
-            for (int i = 0; i < tensor.Length; i++)
-                tensor.SetFlat(i, parameters[idx++]);
-        }
-
-        CopyToTensor(_Wz);
-        CopyToTensor(_Wr);
-        CopyToTensor(_Wh);
-        CopyToTensor(_Uz);
-        CopyToTensor(_Ur);
-        CopyToTensor(_Uh);
-        CopyToTensor(_bz);
-        CopyToTensor(_br);
-        CopyToTensor(_bh);
+        parameters.Slice(idx, _Wz.Length).AsSpan().CopyTo(_Wz.Data.Span); idx += _Wz.Length;
+        parameters.Slice(idx, _Wr.Length).AsSpan().CopyTo(_Wr.Data.Span); idx += _Wr.Length;
+        parameters.Slice(idx, _Wh.Length).AsSpan().CopyTo(_Wh.Data.Span); idx += _Wh.Length;
+        parameters.Slice(idx, _Uz.Length).AsSpan().CopyTo(_Uz.Data.Span); idx += _Uz.Length;
+        parameters.Slice(idx, _Ur.Length).AsSpan().CopyTo(_Ur.Data.Span); idx += _Ur.Length;
+        parameters.Slice(idx, _Uh.Length).AsSpan().CopyTo(_Uh.Data.Span); idx += _Uh.Length;
+        parameters.Slice(idx, _bz.Length).AsSpan().CopyTo(_bz.Data.Span); idx += _bz.Length;
+        parameters.Slice(idx, _br.Length).AsSpan().CopyTo(_br.Data.Span); idx += _br.Length;
+        parameters.Slice(idx, _bh.Length).AsSpan().CopyTo(_bh.Data.Span);
     }
 
     public override Vector<T> GetParameterGradients()
@@ -1448,16 +1443,17 @@ public partial class GRULayer<T> : LayerBase<T>
             return new Vector<T>(ParameterCount);
         }
 
+        // Bulk copy from contiguous tensor storage — avoids ToArray() double-copy
         return Vector<T>.Concatenate(
-            new Vector<T>(_dWz.ToArray()),
-            new Vector<T>(_dWr.ToArray()),
-            new Vector<T>(_dWh.ToArray()),
-            new Vector<T>(_dUz.ToArray()),
-            new Vector<T>(_dUr.ToArray()),
-            new Vector<T>(_dUh.ToArray()),
-            new Vector<T>(_dbz.ToArray()),
-            new Vector<T>(_dbr.ToArray()),
-            new Vector<T>(_dbh.ToArray())
+            Vector<T>.FromMemory(_dWz.Data),
+            Vector<T>.FromMemory(_dWr.Data),
+            Vector<T>.FromMemory(_dWh.Data),
+            Vector<T>.FromMemory(_dUz.Data),
+            Vector<T>.FromMemory(_dUr.Data),
+            Vector<T>.FromMemory(_dUh.Data),
+            Vector<T>.FromMemory(_dbz.Data),
+            Vector<T>.FromMemory(_dbr.Data),
+            Vector<T>.FromMemory(_dbh.Data)
         );
     }
 

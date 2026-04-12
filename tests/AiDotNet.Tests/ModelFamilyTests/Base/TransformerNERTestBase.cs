@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -11,9 +13,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class TransformerNERTestBase : NERModelTestBase
 {
-    [Fact]
-    public void ContextualSensitivity_DifferentContext_DifferentLabels()
+    [Fact(Timeout = 120000)]
+    public async Task ContextualSensitivity_DifferentContext_DifferentLabels()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var input1 = CreateConstantTensor(InputShape, 0.3);
         var input2 = CreateConstantTensor(InputShape, 0.7);
@@ -35,9 +39,11 @@ public abstract class TransformerNERTestBase : NERModelTestBase
             "Transformer NER produces identical labels for different contexts — attention may be broken.");
     }
 
-    [Fact]
-    public void Output_ShouldBeFiniteSequence()
+    [Fact(Timeout = 120000)]
+    public async Task Output_ShouldBeFiniteSequence()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

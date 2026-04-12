@@ -2,6 +2,8 @@ using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -133,9 +135,11 @@ public abstract class AssociativeMemoryTestBase
     // MATHEMATICAL INVARIANT: Output Finite (No NaN/Infinity)
     // =====================================================
 
-    [Fact]
-    public void ForwardPass_ShouldProduceFiniteOutput()
+    [Fact(Timeout = 60000)]
+    public async Task ForwardPass_ShouldProduceFiniteOutput()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -154,9 +158,11 @@ public abstract class AssociativeMemoryTestBase
     // MATHEMATICAL INVARIANT: Finite Output After Training
     // =====================================================
 
-    [Fact]
-    public void ForwardPass_ShouldBeFinite_AfterTraining()
+    [Fact(Timeout = 60000)]
+    public async Task ForwardPass_ShouldBeFinite_AfterTraining()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -179,9 +185,11 @@ public abstract class AssociativeMemoryTestBase
     // MATHEMATICAL INVARIANT: Output Sensitivity to Input
     // =====================================================
 
-    [Fact]
-    public void DifferentInputs_ShouldProduceDifferentOutputs()
+    [Fact(Timeout = 60000)]
+    public async Task DifferentInputs_ShouldProduceDifferentOutputs()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
 
         var input1 = CreateConstantTensor(InputShape, 0.1);
@@ -205,9 +213,11 @@ public abstract class AssociativeMemoryTestBase
             "The network may have collapsed.");
     }
 
-    [Fact]
-    public void Predict_ShouldBeDeterministic()
+    [Fact(Timeout = 60000)]
+    public async Task Predict_ShouldBeDeterministic()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -220,17 +230,21 @@ public abstract class AssociativeMemoryTestBase
             Assert.Equal(out1[i], out2[i]);
     }
 
-    [Fact]
-    public void Parameters_ShouldBeNonEmpty()
+    [Fact(Timeout = 60000)]
+    public async Task Parameters_ShouldBeNonEmpty()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var parameters = network.GetParameters();
         Assert.True(parameters.Length > 0, "Network should have learnable parameters.");
     }
 
-    [Fact]
-    public void Clone_ShouldProduceIdenticalOutput()
+    [Fact(Timeout = 60000)]
+    public async Task Clone_ShouldProduceIdenticalOutput()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -244,9 +258,11 @@ public abstract class AssociativeMemoryTestBase
             Assert.Equal(original[i], clonedOutput[i]);
     }
 
-    [Fact]
-    public void Metadata_ShouldExist()
+    [Fact(Timeout = 60000)]
+    public async Task Metadata_ShouldExist()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -258,9 +274,11 @@ public abstract class AssociativeMemoryTestBase
             "Metadata.Complexity (parameter count) should be positive after training.");
     }
 
-    [Fact]
-    public void Architecture_ShouldHaveValidDimensions()
+    [Fact(Timeout = 60000)]
+    public async Task Architecture_ShouldHaveValidDimensions()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var arch = network.GetArchitecture();
         Assert.NotNull(arch);
@@ -268,9 +286,11 @@ public abstract class AssociativeMemoryTestBase
             "Architecture should have positive input dimensions.");
     }
 
-    [Fact]
-    public void NamedLayerActivations_ShouldBeNonEmpty()
+    [Fact(Timeout = 60000)]
+    public async Task NamedLayerActivations_ShouldBeNonEmpty()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -280,9 +300,11 @@ public abstract class AssociativeMemoryTestBase
         Assert.True(activations.Count > 0, "Named layer activations should not be empty.");
     }
 
-    [Fact]
-    public void OutputDimension_ShouldMatchExpectedShape()
+    [Fact(Timeout = 60000)]
+    public async Task OutputDimension_ShouldMatchExpectedShape()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -296,9 +318,11 @@ public abstract class AssociativeMemoryTestBase
         Assert.Equal(expectedLength, output.Length);
     }
 
-    [Fact]
-    public void ScaledInput_ShouldChangeOutput()
+    [Fact(Timeout = 60000)]
+    public async Task ScaledInput_ShouldChangeOutput()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
 
@@ -332,9 +356,11 @@ public abstract class AssociativeMemoryTestBase
     // MATHEMATICAL INVARIANT: Training Changes Network Behavior
     // =====================================================
 
-    [Fact]
-    public void Training_ShouldChangeOutputBehavior()
+    [Fact(Timeout = 60000)]
+    public async Task Training_ShouldChangeOutputBehavior()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -366,9 +392,11 @@ public abstract class AssociativeMemoryTestBase
     // MATHEMATICAL INVARIANT: Training Should Change Parameters
     // =====================================================
 
-    [Fact]
-    public void Training_ShouldChangeParameters()
+    [Fact(Timeout = 60000)]
+    public async Task Training_ShouldChangeParameters()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -401,9 +429,11 @@ public abstract class AssociativeMemoryTestBase
     // MATHEMATICAL INVARIANT: Training Loss Should Be Finite
     // =====================================================
 
-    [Fact]
-    public void TrainingLoss_ShouldBeFinite()
+    [Fact(Timeout = 60000)]
+    public async Task TrainingLoss_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -431,9 +461,11 @@ public abstract class AssociativeMemoryTestBase
     // toward the target after training.
     // =====================================================
 
-    [Fact]
-    public void PatternAutoAssociation_TrainedPatternShouldBeRecalled()
+    [Fact(Timeout = 60000)]
+    public async Task PatternAutoAssociation_TrainedPatternShouldBeRecalled()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
 
@@ -488,9 +520,11 @@ public abstract class AssociativeMemoryTestBase
     // associative memory.
     // =====================================================
 
-    [Fact]
-    public void NoiseRobustness_ShouldCorrectNoisyInput()
+    [Fact(Timeout = 60000)]
+    public async Task NoiseRobustness_ShouldCorrectNoisyInput()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
 
@@ -535,9 +569,11 @@ public abstract class AssociativeMemoryTestBase
     // the network has sufficient capacity.
     // =====================================================
 
-    [Fact]
-    public void Capacity_AllStoredPatternsShouldBeRecallable()
+    [Fact(Timeout = 60000)]
+    public async Task Capacity_AllStoredPatternsShouldBeRecallable()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
 
@@ -607,9 +643,11 @@ public abstract class AssociativeMemoryTestBase
         return null; // Not all associative memory models have an energy function
     }
 
-    [Fact]
-    public void EnergyMonotonicity_TrainedPatternsShouldHaveLowerEnergy()
+    [Fact(Timeout = 60000)]
+    public async Task EnergyMonotonicity_TrainedPatternsShouldHaveLowerEnergy()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
 
@@ -652,9 +690,11 @@ public abstract class AssociativeMemoryTestBase
     // patterns and verify each is recalled without interference.
     // =====================================================
 
-    [Fact]
-    public void OrthogonalPatterns_ShouldBeRecalledWithoutInterference()
+    [Fact(Timeout = 60000)]
+    public async Task OrthogonalPatterns_ShouldBeRecalledWithoutInterference()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
 
@@ -707,9 +747,11 @@ public abstract class AssociativeMemoryTestBase
     // that the deserialized network produces identical output.
     // =====================================================
 
-    [Fact]
-    public void SerializationRoundTrip_ShouldPreserveRecall()
+    [Fact(Timeout = 60000)]
+    public async Task SerializationRoundTrip_ShouldPreserveRecall()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         if (!SupportsSerializationRoundTrip)
             return;
 
@@ -754,9 +796,11 @@ public abstract class AssociativeMemoryTestBase
     // (catastrophic forgetting check).
     // =====================================================
 
-    [Fact]
-    public void MultiplePatternStability_OlderPatternsShouldNotBeCompletelyForgotten()
+    [Fact(Timeout = 60000)]
+    public async Task MultiplePatternStability_OlderPatternsShouldNotBeCompletelyForgotten()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
 

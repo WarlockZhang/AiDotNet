@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -10,9 +12,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class SpanBasedNERTestBase : NERModelTestBase
 {
-    [Fact]
-    public void SpanScores_ShouldBeBounded()
+    [Fact(Timeout = 120000)]
+    public async Task SpanScores_ShouldBeBounded()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -25,9 +29,11 @@ public abstract class SpanBasedNERTestBase : NERModelTestBase
         }
     }
 
-    [Fact]
-    public void SpanOutput_ShouldBeNonEmpty()
+    [Fact(Timeout = 120000)]
+    public async Task SpanOutput_ShouldBeNonEmpty()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

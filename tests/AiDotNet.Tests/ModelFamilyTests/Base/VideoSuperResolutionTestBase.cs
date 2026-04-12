@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -10,9 +12,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class VideoSuperResolutionTestBase : VideoNNModelTestBase
 {
-    [Fact]
-    public void Output_AtLeastAsLargeAsInput()
+    [Fact(Timeout = 120000)]
+    public async Task Output_AtLeastAsLargeAsInput()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -22,9 +26,11 @@ public abstract class VideoSuperResolutionTestBase : VideoNNModelTestBase
             "SR models should upscale, not downscale.");
     }
 
-    [Fact]
-    public void SuperResolved_ValuesShouldBeFinite()
+    [Fact(Timeout = 120000)]
+    public async Task SuperResolved_ValuesShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

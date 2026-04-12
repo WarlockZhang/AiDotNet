@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -17,9 +19,11 @@ public abstract class GraphNNModelTestBase : NeuralNetworkModelTestBase
     // networks. The model should handle it without producing NaN/Inf.
     // =====================================================
 
-    [Fact]
-    public void SelfLoops_ShouldNotCauseNumericalIssues()
+    [Fact(Timeout = 120000)]
+    public async Task SelfLoops_ShouldNotCauseNumericalIssues()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
 
         // Create a diagonal-heavy input (simulating self-loops in adjacency)
@@ -56,9 +60,11 @@ public abstract class GraphNNModelTestBase : NeuralNetworkModelTestBase
     // The model should produce finite, non-empty output.
     // =====================================================
 
-    [Fact]
-    public void ZeroInput_ShouldNotCrash()
+    [Fact(Timeout = 120000)]
+    public async Task ZeroInput_ShouldNotCrash()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
 
         var input = new Tensor<double>(InputShape);
@@ -82,9 +88,11 @@ public abstract class GraphNNModelTestBase : NeuralNetworkModelTestBase
     // A graph network that ignores structure is fundamentally broken.
     // =====================================================
 
-    [Fact]
-    public void DifferentStructures_ProduceDifferentOutputs()
+    [Fact(Timeout = 120000)]
+    public async Task DifferentStructures_ProduceDifferentOutputs()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
 
         // Input 1: identity-like structure (strong self-connections)

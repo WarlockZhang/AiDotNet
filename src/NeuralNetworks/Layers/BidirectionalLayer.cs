@@ -409,7 +409,7 @@ public class BidirectionalLayer<T> : LayerBase<T>
             backend.Copy2DStrided(srcView.Buffer, outputBuffer, 1, sliceSize, totalSize, dstOffset);
         }
 
-        return GpuTensorHelper.UploadToGpu<T>(backend, outputBuffer, input.Shape.ToArray(), GpuTensorRole.Activation, ownsBuffer: true);
+        return GpuTensorHelper.UploadToGpu<T>(backend, outputBuffer, input._shape, GpuTensorRole.Activation, ownsBuffer: true);
     }
 
     /// <summary>
@@ -441,7 +441,7 @@ public class BidirectionalLayer<T> : LayerBase<T>
             forward.Dispose();
             backward.Dispose();
 
-            return GpuTensorHelper.UploadToGpu<T>(backend, outputBuffer, forward.Shape.ToArray(), GpuTensorRole.Activation, ownsBuffer: true);
+            return GpuTensorHelper.UploadToGpu<T>(backend, outputBuffer, forward._shape, GpuTensorRole.Activation, ownsBuffer: true);
         }
         else
         {

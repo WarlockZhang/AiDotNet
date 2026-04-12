@@ -1,3 +1,4 @@
+using AiDotNet.Helpers;
 using AiDotNet.Interfaces;
 using AiDotNet.Models.Options;
 using AiDotNet.Models.Results;
@@ -336,50 +337,63 @@ public sealed class FederatedCoordinatorService : IFederatedCoordinatorService
 
     private static (int parameterCount, double[] globalParameters) LoadInitialParameters(NumericType numericType, string sourcePath)
     {
-        if (numericType == NumericType.Float)
+        // Serving infrastructure loads models internally — bypass license check
+        using (Helpers.ModelPersistenceGuard.InternalOperation())
         {
-            var model = new AiModelResult<float, Matrix<float>, Vector<float>>();
-            model.LoadFromFile(sourcePath);
-            var p = ((IParameterizable<float, Matrix<float>, Vector<float>>)model).GetParameters();
-            return (p.Length, p.Select(v => (double)v).ToArray());
-        }
+            if (numericType == NumericType.Float)
+            {
+                var model = new AiModelResult<float, Matrix<float>, Vector<float>>();
+                model.LoadFromFile(sourcePath);
+                var p = model.GetParameters();
+                return (p.Length, p.Select(v => (double)v).ToArray());
+            }
 
-        if (numericType == NumericType.Decimal)
-        {
-            var model = new AiModelResult<decimal, Matrix<decimal>, Vector<decimal>>();
-            model.LoadFromFile(sourcePath);
-            var p = ((IParameterizable<decimal, Matrix<decimal>, Vector<decimal>>)model).GetParameters();
-            return (p.Length, p.Select(v => (double)v).ToArray());
-        }
+            if (numericType == NumericType.Decimal)
+            {
+                var model = new AiModelResult<decimal, Matrix<decimal>, Vector<decimal>>();
+                model.LoadFromFile(sourcePath);
+                var p = model.GetParameters();
+                return (p.Length, p.Select(v => (double)v).ToArray());
+            }
 
-        var modelDouble = new AiModelResult<double, Matrix<double>, Vector<double>>();
-        modelDouble.LoadFromFile(sourcePath);
-        var pd = ((IParameterizable<double, Matrix<double>, Vector<double>>)modelDouble).GetParameters();
-        return (pd.Length, pd.ToArray());
+            var modelDouble = new AiModelResult<double, Matrix<double>, Vector<double>>();
+            modelDouble.LoadFromFile(sourcePath);
+            var pd = modelDouble.GetParameters();
+            return (pd.Length, pd.ToArray());
+        }
     }
 
     private static double[] AggregateRoundInternal<T>(FederatedRunState state)
     {
-        var globalBaseline = ToVector<T>(state.GlobalParameters);
-        var model = new AiModelResult<T, Matrix<T>, Vector<T>>();
-        model.LoadFromFile(state.ModelArtifactPath);
-        var globalModel = ((IParameterizable<T, Matrix<T>, Vector<T>>)model).WithParameters(globalBaseline);
-
-        var clientModels = new Dictionary<int, IFullModel<T, Matrix<T>, Vector<T>>>();
-        var clientWeights = new Dictionary<int, double>();
-
-        foreach (var kvp in state.PendingClientParameters)
+        using (AiDotNet.Helpers.ModelPersistenceGuard.InternalOperation())
         {
-            int clientId = kvp.Key;
-            var clientParams = ToVector<T>(kvp.Value);
-            clientModels[clientId] = ((IParameterizable<T, Matrix<T>, Vector<T>>)globalModel).WithParameters(clientParams);
-            clientWeights[clientId] = state.PendingClientWeights[clientId];
-        }
+            var globalBaseline = ToVector<T>(state.GlobalParameters);
+            var modelResult = new AiModelResult<T, Matrix<T>, Vector<T>>();
+            modelResult.LoadFromFile(state.ModelArtifactPath);
 
-        var aggregator = CreateAggregationStrategy<T>(state.Options);
-        var aggregated = aggregator.Aggregate(clientModels, clientWeights);
-        var p = ((IParameterizable<T, Matrix<T>, Vector<T>>)aggregated).GetParameters();
-        return p.Select(v => Convert.ToDouble(v)).ToArray();
+            // Extract the inner model which implements IParameterizable.
+            // AiModelResult is a facade wrapper that does not implement IParameterizable,
+            // but its inner Model does.
+            var innerModel = modelResult.Model
+                ?? throw new InvalidOperationException("Loaded model has no inner model.");
+            var globalModel = InterfaceGuard.Parameterizable(innerModel).WithParameters(globalBaseline);
+
+            var clientModels = new Dictionary<int, IFullModel<T, Matrix<T>, Vector<T>>>();
+            var clientWeights = new Dictionary<int, double>();
+
+            foreach (var kvp in state.PendingClientParameters)
+            {
+                int clientId = kvp.Key;
+                var clientParams = ToVector<T>(kvp.Value);
+                clientModels[clientId] = InterfaceGuard.Parameterizable(globalModel).WithParameters(clientParams);
+                clientWeights[clientId] = state.PendingClientWeights[clientId];
+            }
+
+            var aggregator = CreateAggregationStrategy<T>(state.Options);
+            var aggregated = aggregator.Aggregate(clientModels, clientWeights);
+            var p = InterfaceGuard.Parameterizable(aggregated).GetParameters();
+            return p.Select(v => Convert.ToDouble(v)).ToArray();
+        }
     }
 
     private static IAggregationStrategy<IFullModel<T, Matrix<T>, Vector<T>>> CreateAggregationStrategy<T>(FederatedLearningOptions options)
@@ -565,9 +579,17 @@ public sealed class FederatedCoordinatorService : IFederatedCoordinatorService
 
     private static void PersistTypedArtifact<T>(string artifactPath, double[] globalParameters)
     {
-        var model = new AiModelResult<T, Matrix<T>, Vector<T>>();
-        model.LoadFromFile(artifactPath);
-        var updated = ((IParameterizable<T, Matrix<T>, Vector<T>>)model).WithParameters(ToVector<T>(globalParameters));
-        updated.SaveModel(artifactPath);
+        using (AiDotNet.Helpers.ModelPersistenceGuard.InternalOperation())
+        {
+            var modelResult = new AiModelResult<T, Matrix<T>, Vector<T>>();
+            modelResult.LoadFromFile(artifactPath);
+
+            // Apply new parameters via the inner model (which implements IParameterizable),
+            // then save via the AiModelResult wrapper to preserve the serialization format
+            var innerModel = modelResult.Model
+                ?? throw new InvalidOperationException("Loaded model has no inner model.");
+            Helpers.InterfaceGuard.Parameterizable(innerModel).SetParameters(ToVector<T>(globalParameters));
+            modelResult.SaveModel(artifactPath);
+        }
     }
 }

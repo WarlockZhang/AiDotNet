@@ -290,8 +290,8 @@ public partial class GatedDeltaNetLayer<T> : LayerBase<T>
         if (rank < 3) batchSize = 1;
 
         var input3D = rank == 2
-            ? input.Reshape(1, seqLen, modelDim)
-            : input.Reshape(batchSize, seqLen, modelDim);
+            ? Engine.Reshape(input, new[] { 1, seqLen, modelDim })
+            : Engine.Reshape(input, new[] { batchSize, seqLen, modelDim });
 
         _lastInput = input3D;
 
@@ -302,30 +302,30 @@ public partial class GatedDeltaNetLayer<T> : LayerBase<T>
         _lastSiluConv = siluConv;
 
         // Step 2: Q, K, V projections
-        var siluFlat = siluConv.Reshape(batchSize * seqLen, _modelDimension);
-        var q = Engine.TensorMatMul(siluFlat, _queryWeights).Reshape(batchSize, seqLen, _modelDimension);
-        var k = Engine.TensorMatMul(siluFlat, _keyWeights).Reshape(batchSize, seqLen, _modelDimension);
-        var v = Engine.TensorMatMul(siluFlat, _valueWeights).Reshape(batchSize, seqLen, _modelDimension);
+        var siluFlat = Engine.Reshape(siluConv, new[] { batchSize * seqLen, _modelDimension });
+        var q = Engine.Reshape(Engine.TensorMatMul(siluFlat, _queryWeights), new[] { batchSize, seqLen, _modelDimension });
+        var k = Engine.Reshape(Engine.TensorMatMul(siluFlat, _keyWeights), new[] { batchSize, seqLen, _modelDimension });
+        var v = Engine.Reshape(Engine.TensorMatMul(siluFlat, _valueWeights), new[] { batchSize, seqLen, _modelDimension });
         _lastQuery = q;
         _lastKey = k;
         _lastValue = v;
 
         // Step 3: Gates
-        var betaRaw = Engine.TensorBroadcastAdd(
+        var betaRaw = Engine.Reshape(Engine.TensorBroadcastAdd(
             Engine.TensorMatMul(siluFlat, _betaWeights),
-            _betaBias.Reshape(1, _numHeads)).Reshape(batchSize, seqLen, _numHeads);
+            Engine.Reshape(_betaBias, new[] { 1, _numHeads })), new[] { batchSize, seqLen, _numHeads });
         var beta = Engine.Sigmoid(betaRaw);
         _lastBeta = beta;
 
-        var alphaRaw = Engine.TensorBroadcastAdd(
+        var alphaRaw = Engine.Reshape(Engine.TensorBroadcastAdd(
             Engine.TensorMatMul(siluFlat, _alphaWeights),
-            _alphaBias.Reshape(1, _numHeads)).Reshape(batchSize, seqLen, _numHeads);
+            Engine.Reshape(_alphaBias, new[] { 1, _numHeads })), new[] { batchSize, seqLen, _numHeads });
         var alpha = Engine.Sigmoid(alphaRaw);
         _lastAlpha = alpha;
 
-        var gateRaw = Engine.TensorBroadcastAdd(
+        var gateRaw = Engine.Reshape(Engine.TensorBroadcastAdd(
             Engine.TensorMatMul(siluFlat, _outputGateWeights),
-            _outputGateBias.Reshape(1, _modelDimension)).Reshape(batchSize, seqLen, _modelDimension);
+            Engine.Reshape(_outputGateBias, new[] { 1, _modelDimension })), new[] { batchSize, seqLen, _modelDimension });
         var gate = Engine.Swish(gateRaw);
         _lastGate = gate;
         _lastGateRaw = gateRaw;
@@ -338,24 +338,24 @@ public partial class GatedDeltaNetLayer<T> : LayerBase<T>
         var gatedOutput = Engine.TensorMultiply(output, gate);
 
         // Step 6: Output projection
-        var gatedFlat = gatedOutput.Reshape(batchSize * seqLen, _modelDimension);
+        var gatedFlat = Engine.Reshape(gatedOutput, new[] { batchSize * seqLen, _modelDimension });
         var outputFlat = Engine.TensorMatMul(gatedFlat, _outputProjectionWeights);
-        var outBias = _outputProjectionBias.Reshape(1, _modelDimension);
+        var outBias = Engine.Reshape(_outputProjectionBias, new[] { 1, _modelDimension });
         outputFlat = Engine.TensorBroadcastAdd(outputFlat, outBias);
-        var output3D = outputFlat.Reshape(batchSize, seqLen, _modelDimension);
+        var output3D = Engine.Reshape(outputFlat, new[] { batchSize, seqLen, _modelDimension });
 
         var result = ApplyActivation(output3D);
         _lastOutput = result;
 
         if (rank == 2)
-            return result.Reshape(seqLen, _modelDimension);
+            return Engine.Reshape(result, new[] { seqLen, _modelDimension });
 
         var outputShape = new int[rank];
         for (int i = 0; i < rank - 2; i++)
             outputShape[i] = input.Shape[i];
         outputShape[rank - 2] = seqLen;
         outputShape[rank - 1] = _modelDimension;
-        return result.Reshape(outputShape);
+        return Engine.Reshape(result, outputShape);
     }
 
     /// <summary>
@@ -457,32 +457,38 @@ public partial class GatedDeltaNetLayer<T> : LayerBase<T>
     private Tensor<T> DepthwiseConv1DForward(Tensor<T> input, int batchSize, int seqLen)
     {
         var output = TensorAllocator.Rent<T>(new[] { batchSize, seqLen, _modelDimension });
-        var bias2D = _convBias.Reshape(1, _modelDimension);
+        var bias2D = Engine.Reshape(_convBias, new[] { 1, _modelDimension });
 
         var weightSlices = new Tensor<T>[_convKernelSize];
         for (int ki = 0; ki < _convKernelSize; ki++)
         {
-            weightSlices[ki] = _convWeights.GetSliceAlongDimension(ki, 1)
-                .Reshape(1, _modelDimension);
+            weightSlices[ki] = Engine.Reshape(
+                _convWeights.GetSliceAlongDimension(ki, 1),
+                new[] { 1, _modelDimension });
         }
 
         for (int t = 0; t < seqLen; t++)
         {
-            var result_t = Engine.TensorBroadcastAdd(
-                new Tensor<T>(new[] { batchSize, _modelDimension }), bias2D);
-
+            // Accumulate weighted past inputs, then add bias last.
+            Tensor<T>? result_t = null;
             for (int ki = 0; ki < _convKernelSize; ki++)
             {
                 int srcT = t - ki;
                 if (srcT >= 0)
                 {
                     var x_src = input.GetSliceAlongDimension(srcT, 1);
-                    result_t = Engine.TensorAdd(result_t,
-                        Engine.TensorBroadcastMultiply(x_src, weightSlices[ki]));
+                    var weighted = Engine.TensorBroadcastMultiply(x_src, weightSlices[ki]);
+                    result_t = result_t is null
+                        ? weighted
+                        : Engine.TensorAdd(result_t, weighted);
                 }
             }
 
-            output.SetSlice(1, t, result_t);
+            var final_t = result_t is null
+                ? Engine.TensorBroadcastAdd(new Tensor<T>(new[] { batchSize, _modelDimension }), bias2D)
+                : Engine.TensorBroadcastAdd(result_t, bias2D);
+
+            output.SetSlice(1, t, final_t);
         }
 
         return output;
@@ -505,38 +511,6 @@ public partial class GatedDeltaNetLayer<T> : LayerBase<T>
         var ones = new Tensor<T>(template._shape);
         ones.Fill(NumOps.One);
         return ones;
-    }
-
-    private Tensor<T> DepthwiseConv1DBackward(
-        Tensor<T> dOutput, Tensor<T> input, int batchSize, int seqLen)
-    {
-        var dInput = TensorAllocator.Rent<T>(new[] { batchSize, seqLen, _modelDimension });
-
-        var weightSlices = new Tensor<T>[_convKernelSize];
-        for (int ki = 0; ki < _convKernelSize; ki++)
-        {
-            weightSlices[ki] = _convWeights.GetSliceAlongDimension(ki, 1)
-                .Reshape(1, _modelDimension);
-        }
-
-        for (int t = 0; t < seqLen; t++)
-        {
-            var dOut_t = dOutput.GetSliceAlongDimension(t, 1);
-
-            for (int ki = 0; ki < _convKernelSize; ki++)
-            {
-                int srcT = t - ki;
-                if (srcT >= 0)
-                {
-                    var dInputContrib = Engine.TensorBroadcastMultiply(dOut_t, weightSlices[ki]);
-                    var dInput_srcT = dInput.GetSliceAlongDimension(srcT, 1);
-                    dInput_srcT = Engine.TensorAdd(dInput_srcT, dInputContrib);
-                    dInput.SetSlice(1, srcT, dInput_srcT);
-                }
-            }
-        }
-
-        return dInput;
     }
 
     #region Parameter Management

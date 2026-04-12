@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -11,9 +13,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class SequenceLabelingNERTestBase : NERModelTestBase
 {
-    [Fact]
-    public void SequenceLabels_ShouldMatchInputLength()
+    [Fact(Timeout = 120000)]
+    public async Task SequenceLabels_ShouldMatchInputLength()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -23,9 +27,11 @@ public abstract class SequenceLabelingNERTestBase : NERModelTestBase
         Assert.True(output.Length > 0, "Sequence labeling produced empty output.");
     }
 
-    [Fact]
-    public void SequenceLabeling_ShouldBeDeterministic()
+    [Fact(Timeout = 120000)]
+    public async Task SequenceLabeling_ShouldBeDeterministic()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

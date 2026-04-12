@@ -524,7 +524,7 @@ public partial class SpatialTransformerLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         var scaledTensor = Engine.TensorMultiplyScalar(centeredTensor, scale);
 
         // Copy back to original tensor (preserving shape)
-        var reshapedResult = scaledTensor.Reshape(tensor.Shape.ToArray());
+        var reshapedResult = scaledTensor.Reshape(tensor._shape);
         Array.Copy(reshapedResult.ToArray(), tensor.ToArray(), totalElements);
     }
 
@@ -642,36 +642,39 @@ public partial class SpatialTransformerLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         {
             if (channelFirst)
             {
-                var inputNCHW = input.Reshape([flatBatch, channelCount, _inputHeight, _inputWidth]);
-                inputNHWC = inputNCHW.Transpose([0, 2, 3, 1]);
+                var inputNCHW = Engine.Reshape(input, [flatBatch, channelCount, _inputHeight, _inputWidth]);
+                // Via Engine so the gradient tape records the permute — direct
+                // .Transpose bypasses the tape and breaks backward through the
+                // spatial transformer's localization head.
+                inputNHWC = Engine.TensorPermute(inputNCHW, new[] { 0, 2, 3, 1 });
             }
             else
             {
-                inputNHWC = input.Reshape([flatBatch, _inputHeight, _inputWidth, channelCount]);
+                inputNHWC = Engine.Reshape(input, [flatBatch, _inputHeight, _inputWidth, channelCount]);
             }
         }
         else
         {
-            inputNHWC = input.Reshape([flatBatch, _inputHeight, _inputWidth, 1]);
+            inputNHWC = Engine.Reshape(input, [flatBatch, _inputHeight, _inputWidth, 1]);
         }
 
         _lastInput = inputNHWC;
 
         var channelSum = Engine.ReduceSum(inputNHWC, new[] { 3 }, keepDims: false);
         var channelMean = Engine.TensorDivideScalar(channelSum, NumOps.FromDouble(channelCount));
-        var flattenedInput = channelMean.Reshape([flatBatch, _inputHeight * _inputWidth]);
+        var flattenedInput = Engine.Reshape(channelMean, [flatBatch, _inputHeight * _inputWidth]);
         _lastFlattenedInput = flattenedInput;
 
         // First layer: localization1 = flattenedInput @ _localizationWeights1 + _localizationBias1
         var localization1 = Engine.TensorMatMul(flattenedInput, _localizationWeights1);
-        var bias1Expanded = _localizationBias1.Reshape([1, _localizationBias1.Shape[0]]);
+        var bias1Expanded = Engine.Reshape(_localizationBias1, [1, _localizationBias1.Shape[0]]);
         localization1 = Engine.TensorBroadcastAdd(localization1, bias1Expanded);
         localization1 = ApplyActivation(localization1);
         _lastLocalization1 = localization1;
 
         // Second layer: transformationParams = localization1 @ _localizationWeights2 + _localizationBias2
         var transformationParams = Engine.TensorMatMul(localization1, _localizationWeights2);
-        var bias2Expanded = _localizationBias2.Reshape([1, _localizationBias2.Shape[0]]);
+        var bias2Expanded = Engine.Reshape(_localizationBias2, [1, _localizationBias2.Shape[0]]);
         transformationParams = Engine.TensorBroadcastAdd(transformationParams, bias2Expanded);
 
         _lastTransformationMatrix = ConvertToTransformationMatrix(transformationParams);
@@ -685,7 +688,7 @@ public partial class SpatialTransformerLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         if (_inputHadChannel)
         {
             Tensor<T> outputForReshape = _inputChannelFirst
-                ? output.Transpose([0, 3, 1, 2])
+                ? Engine.TensorPermute(output, new[] { 0, 3, 1, 2 })
                 : output;
 
             var outShape = new int[batchDims + 3];
@@ -704,13 +707,13 @@ public partial class SpatialTransformerLayer<T> : LayerBase<T>, IAuxiliaryLossLa
                 outShape[batchDims + 2] = channelCount;
             }
 
-            return outputForReshape.Reshape(outShape);
+            return Engine.Reshape(outputForReshape, outShape);
         }
 
-        var outputNoChannel = output.Reshape([flatBatch, _outputHeight, _outputWidth]);
+        var outputNoChannel = Engine.Reshape(output, [flatBatch, _outputHeight, _outputWidth]);
         if (batchDims == 0)
         {
-            return outputNoChannel.Reshape([_outputHeight, _outputWidth]);
+            return Engine.Reshape(outputNoChannel, [_outputHeight, _outputWidth]);
         }
 
         var outputShape = new int[batchDims + 2];
@@ -719,7 +722,7 @@ public partial class SpatialTransformerLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         outputShape[batchDims] = _outputHeight;
         outputShape[batchDims + 1] = _outputWidth;
 
-        return outputNoChannel.Reshape(outputShape);
+        return Engine.Reshape(outputNoChannel, outputShape);
     }
 
 
@@ -796,157 +799,6 @@ public partial class SpatialTransformerLayer<T> : LayerBase<T>, IAuxiliaryLossLa
     // Removed SampleInputImage (unused)
 
     // Removed BackwardSampler (unused)
-
-    /// <summary>
-    /// Computes the gradient of the loss with respect to the grid generator operations.
-    /// </summary>
-    /// <param name="samplerGradient">The gradient of the loss with respect to the sampler operations.</param>
-    /// <param name="transformationMatrix">The transformation matrix used in the forward pass.</param>
-    /// <returns>The gradient of the loss with respect to the transformation matrix.</returns>
-    /// <remarks>
-    /// <para>
-    /// This method computes the gradient of the loss with respect to the grid generator operations, which includes
-    /// the gradient with respect to the transformation matrix. It calculates how changes in the transformation
-    /// parameters affect the output through the sampling process.
-    /// </para>
-    /// <para><b>For Beginners:</b> This method calculates how changes in the grid coordinates affect the overall result.
-    /// 
-    /// During the backward pass through the grid generator:
-    /// - The method takes gradients from the sampler and calculates how they relate to the transformation parameters
-    /// - It accumulates gradients for each element in the transformation matrix
-    /// - This shows how changing each transformation parameter would affect the final output
-    /// 
-    /// This step is important for understanding how to adjust the transformation to improve the result.
-    /// </para>
-    /// </remarks>
-    private Tensor<T> BackwardGridGenerator(Tensor<T> samplerGradient, Tensor<T> transformationMatrix)
-    {
-        // Fully vectorized implementation using Engine operations
-        // samplerGradient shape: [outputHeight, outputWidth, 2]
-
-        // Extract gradX and gradY channels using TensorSliceAxis
-        var gradX2D = Engine.TensorSliceAxis(samplerGradient, 2, 0); // [H, W]
-        var gradY2D = Engine.TensorSliceAxis(samplerGradient, 2, 1); // [H, W]
-
-        // Flatten for subsequent operations
-        var flatGradX = gradX2D.Reshape([_outputHeight * _outputWidth]);
-        var flatGradY = gradY2D.Reshape([_outputHeight * _outputWidth]);
-
-        // Create normalized coordinate grids [-1, 1] using TensorLinspace and TensorMeshgrid
-        var xRange = Engine.TensorLinspace(NumOps.FromDouble(-1.0), NumOps.FromDouble(1.0), _outputWidth);
-        var yRange = Engine.TensorLinspace(NumOps.FromDouble(-1.0), NumOps.FromDouble(1.0), _outputHeight);
-        var (xGrid, yGrid) = Engine.TensorMeshgrid(xRange, yRange);
-
-        // Flatten coordinates
-        var xCoords = xGrid.Reshape([_outputHeight * _outputWidth]);
-        var yCoords = yGrid.Reshape([_outputHeight * _outputWidth]);
-
-        // Compute gradient contributions using Engine operations
-        // grad[0,0] = sum(gradX * xCoords)
-        // grad[0,1] = sum(gradX * yCoords)
-        // grad[0,2] = sum(gradX)
-        // grad[1,0] = sum(gradY * xCoords)
-        // grad[1,1] = sum(gradY * yCoords)
-        // grad[1,2] = sum(gradY)
-
-        var gradX_xCoords = Engine.TensorMultiply(flatGradX, xCoords);
-        var gradX_yCoords = Engine.TensorMultiply(flatGradX, yCoords);
-        var gradY_xCoords = Engine.TensorMultiply(flatGradY, xCoords);
-        var gradY_yCoords = Engine.TensorMultiply(flatGradY, yCoords);
-
-        // Sum all elements using ReduceSum
-        var grad00 = Engine.ReduceSum(gradX_xCoords, [0], keepDims: false);
-        var grad01 = Engine.ReduceSum(gradX_yCoords, [0], keepDims: false);
-        var grad02 = Engine.ReduceSum(flatGradX, [0], keepDims: false);
-        var grad10 = Engine.ReduceSum(gradY_xCoords, [0], keepDims: false);
-        var grad11 = Engine.ReduceSum(gradY_yCoords, [0], keepDims: false);
-        var grad12 = Engine.ReduceSum(flatGradY, [0], keepDims: false);
-
-        // Build the result tensor
-        var gridGeneratorGradient = new Tensor<T>([2, 3]);
-        gridGeneratorGradient[0, 0] = grad00.GetFlat(0);
-        gridGeneratorGradient[0, 1] = grad01.GetFlat(0);
-        gridGeneratorGradient[0, 2] = grad02.GetFlat(0);
-        gridGeneratorGradient[1, 0] = grad10.GetFlat(0);
-        gridGeneratorGradient[1, 1] = grad11.GetFlat(0);
-        gridGeneratorGradient[1, 2] = grad12.GetFlat(0);
-
-        return gridGeneratorGradient;
-    }
-
-    /// <summary>
-    /// Computes the gradient of the loss with respect to the localization network parameters.
-    /// </summary>
-    /// <param name="gridGeneratorGradient">The gradient of the loss with respect to the transformation matrix.</param>
-    /// <param name="input">The input tensor for the current batch.</param>
-    /// <remarks>
-    /// <para>
-    /// This method computes the gradient of the loss with respect to the weights and biases of the localization network.
-    /// It uses the chain rule to propagate the gradient from the transformation matrix back through the localization network.
-    /// </para>
-    /// <para><b>For Beginners:</b> This method calculates how the localization network's parameters should change.
-    /// 
-    /// During the backward pass through the localization network:
-    /// - The method takes gradients from the grid generator and propagates them back through the network
-    /// - It computes how each weight and bias in the localization network affects the transformation
-    /// - These gradients are stored for later use when updating the parameters
-    /// 
-    /// This step is crucial for learning the optimal transformation parameters for the task.
-    /// It shows how to adjust the "smart camera" weights to improve the overall performance.
-    /// </para>
-    /// </remarks>
-    private void BackwardLocalizationNetwork(Tensor<T> gridGeneratorGradient, Tensor<T> input)
-    {
-        if (_lastInput == null)
-            throw new InvalidOperationException("Forward pass must be called before backward pass.");
-
-        int batchSize = _lastInput.Shape[0];
-
-        // Flatten input
-        var flattenedInput = input.Reshape([input.Shape[0], _inputHeight * _inputWidth * input.Shape[3]]);
-
-        // Backward pass through the second layer of localization network
-        // gridGeneratorGradient is [2, 3], reshape to [1, 6] for dL_dTheta
-        var dL_dTheta = gridGeneratorGradient.Reshape([1, 6]);
-
-        // dL_dL1 = dL_dTheta @ _localizationWeights2.T
-        var weights2T = Engine.TensorTranspose(_localizationWeights2);
-        var dL_dL1 = Engine.TensorMatMul(dL_dTheta, weights2T);
-
-        // Update weights2 gradient: _localizationWeights2Gradient += flattenedInput.T @ dL_dTheta
-        // flattenedInput is [batchSize, inputSize], dL_dTheta is [1, 6]
-        // For simplicity, we use the first sample
-        var flatInputT = Engine.TensorTranspose(flattenedInput);
-        var w2GradUpdate = Engine.TensorMatMul(flatInputT, dL_dTheta);
-        // Add gradient update to weights2 gradient using Engine ops
-        // Only take relevant part [32, 6]
-        var w2UpdateSliced = Engine.TensorSlice(w2GradUpdate, [0, 0], [_localizationWeights2.Shape[0], _localizationWeights2.Shape[1]]);
-        _localizationWeights2Gradient = Engine.TensorAdd(_localizationWeights2Gradient!, w2UpdateSliced);
-
-        // Update bias2 gradient: sum over rows of dL_dTheta -> squeeze first row
-        var bias2Update = Engine.TensorSqueeze(dL_dTheta, 0); // [6]
-        _localizationBias2Gradient = Engine.TensorAdd(_localizationBias2Gradient!, bias2Update);
-
-        // Backward pass through the activation function
-        // z1 = flattenedInput @ _localizationWeights1 + bias1
-        var z1 = Engine.TensorMatMul(flattenedInput, _localizationWeights1);
-        var bias1Expanded = _localizationBias1.Reshape([1, _localizationBias1.Shape[0]]);
-        z1 = Engine.TensorAdd(z1, bias1Expanded);
-
-        // Apply activation gradient
-        var dL_dZ1 = ApplyActivationGradientTensor(dL_dL1, z1);
-
-        // Backward pass through the first layer of localization network
-        // _localizationWeights1Gradient += flattenedInput.T @ dL_dZ1
-        var w1GradUpdate = Engine.TensorMatMul(flatInputT, dL_dZ1);
-        // Add gradient update using Engine ops - slice to match shape
-        var w1UpdateSliced = Engine.TensorSlice(w1GradUpdate, [0, 0], [_localizationWeights1.Shape[0], _localizationWeights1.Shape[1]]);
-        _localizationWeights1Gradient = Engine.TensorAdd(_localizationWeights1Gradient!, w1UpdateSliced);
-
-        // Update bias1 gradient: sum over batch dimension (axis 0) of dL_dZ1
-        var bias1Update = Engine.ReduceSum(dL_dZ1, [0], keepDims: false); // [32]
-        _localizationBias1Gradient = Engine.TensorAdd(_localizationBias1Gradient!, bias1Update);
-    }
 
     /// <summary>
     /// Applies the activation function gradient to a tensor.

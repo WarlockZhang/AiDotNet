@@ -573,6 +573,7 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
         int width;
         int channels;
 
+        // Shape ops via Engine so the gradient tape records them.
         if (rank == 4)
         {
             // 4D: [timeSteps, height, width, channels] -> add batch dim
@@ -581,7 +582,7 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
             height = input.Shape[1];
             width = input.Shape[2];
             channels = input.Shape[3];
-            input5D = input.Reshape([1, timeSteps, height, width, channels]);
+            input5D = Engine.Reshape(input, new[] { 1, timeSteps, height, width, channels });
         }
         else if (rank == 5)
         {
@@ -604,7 +605,7 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
             height = input.Shape[rank - 3];
             width = input.Shape[rank - 2];
             channels = input.Shape[rank - 1];
-            input5D = input.Reshape([flatBatch, timeSteps, height, width, channels]);
+            input5D = Engine.Reshape(input, new[] { flatBatch, timeSteps, height, width, channels });
         }
         else
         {
@@ -627,10 +628,10 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
             output.SetSlice(1, t, _lastHiddenState);
         }
 
-        // Restore original batch dimensions for any-rank support
+        // Restore original batch dimensions for any-rank support (via Engine
+        // so the reshape stays on the gradient tape).
         if (_originalInputShape != null && _originalInputShape.Length > 5)
         {
-            // Output shape: [...leadingDims, timeSteps, height, width, filters]
             int[] newShape = new int[_originalInputShape.Length];
             for (int d = 0; d < _originalInputShape.Length - 4; d++)
                 newShape[d] = _originalInputShape[d];
@@ -638,12 +639,12 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
             newShape[_originalInputShape.Length - 3] = height;
             newShape[_originalInputShape.Length - 2] = width;
             newShape[_originalInputShape.Length - 1] = _filters;
-            output = output.Reshape(newShape);
+            output = Engine.Reshape(output, newShape);
         }
         else if (_originalInputShape != null && _originalInputShape.Length == 4)
         {
             // 4D input -> 4D output (remove batch dim)
-            output = output.Reshape([timeSteps, height, width, _filters]);
+            output = Engine.Reshape(output, new[] { timeSteps, height, width, _filters });
         }
 
         return output;
@@ -1318,61 +1319,6 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
     }
 
     /// <summary>
-    /// Structure to hold gradients for all parameters of the ConvLSTM cell.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// This structure organizes gradients for all weights and biases in the ConvLSTM cell:
-    /// </para>
-    /// <para>
-    /// - dWfi, dWii, dWci, dWoi: Gradients for input weights
-    /// - dWfh, dWih, dWch, dWoh: Gradients for hidden state weights
-    /// - dbf, dbi, dbc, dbo: Gradients for biases
-    /// </para>
-    /// <para><b>For Beginners:</b> This structure keeps track of all the updates for weights and biases.
-    /// 
-    /// Think of this as a organized container with slots for each update:
-    /// - Updates for weights that process the input (dWfi, dWii, dWci, dWoi)
-    /// - Updates for weights that process the previous output (dWfh, dWih, dWch, dWoh)
-    /// - Updates for bias values (dbf, dbi, dbc, dbo)
-    /// 
-    /// Having a structure like this makes it easier to gather all updates in one place
-    /// before applying them to the actual parameters.
-    /// </para>
-    /// </remarks>
-    private struct CellGradients
-    {
-        public Tensor<T> dWfi, dWii, dWci, dWoi, dWfh, dWih, dWch, dWoh, dbf, dbi, dbc, dbo;
-
-        /// <summary>
-        /// Initializes a new instance of the CellGradients structure with the specified gradient tensors.
-        /// </summary>
-        /// <param name="dWfi">Gradient for forget gate input weights</param>
-        /// <param name="dWii">Gradient for input gate input weights</param>
-        /// <param name="dWci">Gradient for cell input weights</param>
-        /// <param name="dWoi">Gradient for output gate input weights</param>
-        /// <param name="dWfh">Gradient for forget gate hidden weights</param>
-        /// <param name="dWih">Gradient for input gate hidden weights</param>
-        /// <param name="dWch">Gradient for cell hidden weights</param>
-        /// <param name="dWoh">Gradient for output gate hidden weights</param>
-        /// <param name="dbf">Gradient for forget gate bias</param>
-        /// <param name="dbi">Gradient for input gate bias</param>
-        /// <param name="dbc">Gradient for cell bias</param>
-        /// <param name="dbo">Gradient for output gate bias</param>
-        /// <remarks>
-        /// This constructor initializes all the gradient fields in the structure with the provided tensors.
-        /// </remarks>
-        public CellGradients(Tensor<T> dWfi, Tensor<T> dWii, Tensor<T> dWci, Tensor<T> dWoi,
-            Tensor<T> dWfh, Tensor<T> dWih, Tensor<T> dWch, Tensor<T> dWoh,
-            Tensor<T> dbf, Tensor<T> dbi, Tensor<T> dbc, Tensor<T> dbo)
-        {
-            this.dWfi = dWfi; this.dWii = dWii; this.dWci = dWci; this.dWoi = dWoi;
-            this.dWfh = dWfh; this.dWih = dWih; this.dWch = dWch; this.dWoh = dWoh;
-            this.dbf = dbf; this.dbi = dbi; this.dbc = dbc; this.dbo = dbo;
-        }
-    }
-
-    /// <summary>
     /// Updates all trainable parameters of the layer using the computed gradients and specified learning rate.
     /// </summary>
     /// <param name="learningRate">The learning rate controlling how much to adjust parameters</param>
@@ -2019,4 +1965,18 @@ public partial class ConvLSTMLayer<T> : LayerBase<T>
     }
 
     #endregion
+
+    private struct CellGradients
+    {
+        public Tensor<T> dWfi, dWii, dWci, dWoi, dWfh, dWih, dWch, dWoh, dbf, dbi, dbc, dbo;
+
+        public CellGradients(Tensor<T> dWfi, Tensor<T> dWii, Tensor<T> dWci, Tensor<T> dWoi,
+            Tensor<T> dWfh, Tensor<T> dWih, Tensor<T> dWch, Tensor<T> dWoh,
+            Tensor<T> dbf, Tensor<T> dbi, Tensor<T> dbc, Tensor<T> dbo)
+        {
+            this.dWfi = dWfi; this.dWii = dWii; this.dWci = dWci; this.dWoi = dWoi;
+            this.dWfh = dWfh; this.dWih = dWih; this.dWch = dWch; this.dWoh = dWoh;
+            this.dbf = dbf; this.dbi = dbi; this.dbc = dbc; this.dbo = dbo;
+        }
+    }
 }

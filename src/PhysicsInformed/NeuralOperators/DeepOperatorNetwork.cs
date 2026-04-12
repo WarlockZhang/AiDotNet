@@ -564,13 +564,14 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
                 {
                     T totalLoss = NumOps.Zero;
 
+                    // Collect all trainable parameters from both sub-networks
+                    var allParams = Training.TapeTrainingStep<T>.CollectParameters(Layers);
+
                     for (int i = 0; i < numSamples; i++)
                     {
                         var branchInput = new Tensor<T>(new int[] { 1, _numSensors });
-                        var inputFunction = new T[_numSensors];
                         for (int j = 0; j < _numSensors; j++)
                         {
-                            inputFunction[j] = inputFunctions[i, j];
                             branchInput[0, j] = inputFunctions[i, j];
                         }
 
@@ -583,46 +584,45 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
                             }
                         }
 
-                        var branchOutput = _branchNet.ForwardWithMemory(branchInput);
-                        var trunkOutput = _trunkNet.ForwardWithMemory(trunkInput);
-
-                        var branchOutput2D = branchOutput.Rank == 2
-                            ? branchOutput
-                            : branchOutput.Reshape(1, _p);
-                        var trunkOutput2D = trunkOutput.Rank == 2
-                            ? trunkOutput
-                            : trunkOutput.Reshape(numQueries, _p);
-                        var branchOutputT = Engine.TensorTranspose(branchOutput2D);
-                        var predictions = Engine.TensorMatMul(trunkOutput2D, branchOutputT);
-
                         var targets = new Tensor<T>(new int[] { numQueries, 1 });
-                        var targetValuesSample = new T[numQueries];
                         for (int q = 0; q < numQueries; q++)
                         {
                             targets[q, 0] = targetValues[i, q];
-                            targetValuesSample[q] = targetValues[i, q];
                         }
 
-                        var loss = lossFunction.CalculateLoss(predictions.ToVector(), targets.ToVector());
-                        totalLoss = NumOps.Add(totalLoss, loss);
+                        // Single tape over the FULL DON forward: branch + trunk + combine
+                        using var tape = new AiDotNet.Tensors.Engines.Autodiff.GradientTape<T>();
 
-                        // Backpropagation: compute gradients for both branch and trunk networks
-                        var outputGradientVector = lossFunction.CalculateDerivative(predictions.ToVector(), targets.ToVector());
-                        var outputGradient = new Tensor<T>(predictions._shape, outputGradientVector);
+                        var branchOutput = _branchNet.ForwardForTraining(branchInput);
+                        var trunkOutput = _trunkNet.ForwardForTraining(trunkInput);
 
-                        // Gradient for branch network: grad_branch = (grad_output)^T * trunk_output
-                        var branchGradient = Engine.TensorMatMul(Engine.TensorTranspose(outputGradient), trunkOutput2D);
-                        // Gradient for trunk network: grad_trunk = grad_output * branch_output
-                        var trunkGradient = Engine.TensorMatMul(outputGradient, branchOutput2D);
+                        var branchOutput2D = branchOutput.Rank == 2
+                            ? branchOutput
+                            : Engine.Reshape(branchOutput, new[] { 1, _p });
+                        var trunkOutput2D = trunkOutput.Rank == 2
+                            ? trunkOutput
+                            : Engine.Reshape(trunkOutput, new[] { numQueries, _p });
+                        var branchOutputT = Engine.TensorTranspose(branchOutput2D);
+                        var predictions = Engine.TensorMatMul(trunkOutput2D, branchOutputT);
 
-                        // Backpropagate through both networks
+                        // Compute loss under the same tape
+                        var lossTensor = ((LossFunctions.LossFunctionBase<T>)lossFunction)
+                            .ComputeTapeLoss(predictions, targets);
+                        T lossVal = lossTensor.Length > 0 ? lossTensor[0] : NumOps.Zero;
+                        totalLoss = NumOps.Add(totalLoss, lossVal);
 
-                        // Update parameters using optimizer
-                        _optimizer.UpdateParameters(_branchNet.Layers);
-                        _optimizer.UpdateParameters(_trunkNet.Layers);
+                        // Backprop through the COMBINED graph — gradients flow to both branch and trunk
+                        var grads = tape.ComputeGradients(lossTensor, allParams);
 
-                        ClearNetworkGradients(_branchNet);
-                        ClearNetworkGradients(_trunkNet);
+                        // Update all parameters using optimizer
+                        var opt = _optimizer;
+                        var context = new AiDotNet.Tensors.Engines.Autodiff.TapeStepContext<T>(
+                            allParams, grads, lossVal,
+                            branchInput, targets,
+                            (inp, _) => ForwardForTraining(inp),
+                            (pred, tgt) => ((LossFunctions.LossFunctionBase<T>)lossFunction).ComputeTapeLoss(pred, tgt),
+                            null);
+                        opt.Step(context);
                     }
 
                     T avgLoss = numSamples > 0

@@ -1,117 +1,158 @@
 
-using AiDotNet.Helpers;
 using AiDotNet.Interfaces;
 using AiDotNet.LinearAlgebra;
 
 namespace AiDotNet.NestedLearning;
 
 /// <summary>
-/// Implementation of Associative Memory for nested learning.
-/// Models both backpropagation (data point → local error) and
-/// attention mechanisms (query → key-value) as associative memory.
+/// Implementation of Associative Memory for nested learning using modern continuous
+/// Hopfield retrieval (Ramsauer et al. 2021). Stores key-value pairs and retrieves
+/// via softmax attention: new_state = softmax(β * keys^T @ query) @ values.
 /// </summary>
 /// <typeparam name="T">The numeric type</typeparam>
-public class AssociativeMemory<T> : IAssociativeMemory<T>
+public class AssociativeMemory<T> : NestedLearningBase<T>, IAssociativeMemory<T>
 {
     private readonly int _capacity;
     private readonly int _dimension;
+    private readonly double _inverseTemperature;
     private readonly List<(Vector<T> Input, Vector<T> Target)> _memories;
-    private Matrix<T> _associationMatrix;
-    private static readonly INumericOperations<T> _numOps = MathHelper.GetNumericOperations<T>();
+    private Matrix<T>? _cachedAssociationMatrix;
 
-    public AssociativeMemory(int dimension, int capacity = 1000)
+    /// <summary>Cosine similarity threshold for treating two keys as duplicates in Update.</summary>
+    private const double DuplicateKeyThreshold = 0.99;
+
+    /// <summary>Small epsilon to prevent division by zero in cosine similarity.</summary>
+    private const double CosineEpsilon = 1e-10;
+    private Tensor<T>? _cachedValuesTensor;
+
+    public AssociativeMemory(int dimension, int capacity = 1000, double inverseTemperature = 8.0)
     {
+        if (dimension < 1)
+            throw new ArgumentOutOfRangeException(nameof(dimension), dimension, "Dimension must be at least 1.");
+        if (capacity < 1)
+            throw new ArgumentOutOfRangeException(nameof(capacity), capacity, "Capacity must be at least 1.");
+        if (inverseTemperature <= 0 || double.IsNaN(inverseTemperature) || double.IsInfinity(inverseTemperature))
+            throw new ArgumentOutOfRangeException(nameof(inverseTemperature), inverseTemperature, "Must be a finite positive value.");
         _dimension = dimension;
         _capacity = capacity;
+        _inverseTemperature = inverseTemperature;
         _memories = new List<(Vector<T>, Vector<T>)>();
-        _associationMatrix = new Matrix<T>(dimension, dimension);
     }
 
     public void Associate(Vector<T> input, Vector<T> target)
     {
+        if (input == null) throw new ArgumentNullException(nameof(input));
+        if (target == null) throw new ArgumentNullException(nameof(target));
         if (input.Length != _dimension || target.Length != _dimension)
             throw new ArgumentException("Input and target must match memory dimension");
 
-        // Add to memory buffer
         _memories.Add((input.Clone(), target.Clone()));
+        _cachedAssociationMatrix = null;
+        _cachedValuesTensor = null;
 
-        // Maintain capacity limit (FIFO)
         if (_memories.Count > _capacity)
         {
             _memories.RemoveAt(0);
         }
-
-        // Update association matrix using Hebbian-like learning
-        UpdateAssociationMatrix(input, target, _numOps.FromDouble(0.01));
     }
 
     public Vector<T> Retrieve(Vector<T> query)
     {
+        if (query == null) throw new ArgumentNullException(nameof(query));
         if (query.Length != _dimension)
-            throw new ArgumentException("Query must match memory dimension");
+            throw new ArgumentException($"Query length {query.Length} must match memory dimension {_dimension}.", nameof(query));
 
-        // Retrieve using association matrix (similar to attention mechanism)
-        var retrieved = _associationMatrix.Multiply(query);
+        if (_memories.Count == 0)
+            return new Vector<T>(_dimension);
 
-        // Also check for exact or near matches in memory buffer
-        T bestSimilarity = _numOps.FromDouble(double.NegativeInfinity);
-        Vector<T>? bestMatch = null;
+        // Modern continuous Hopfield retrieval per Ramsauer et al. 2021:
+        // new_state = softmax(β * keys^T @ query) @ values
+        //
+        // Softmax is computed in double for numerical stability — the exp/log operations
+        // in softmax benefit from double precision regardless of T. This matches PyTorch's
+        // F.softmax which upcasts to float32 even for float16 inputs.
+        var scores = new double[_memories.Count];
+        double maxScore = double.NegativeInfinity;
 
-        foreach (var (input, target) in _memories)
+        for (int m = 0; m < _memories.Count; m++)
         {
-            T similarity = ComputeSimilarity(query, input);
-            if (_numOps.GreaterThan(similarity, bestSimilarity))
+            T dot = Engine.DotProduct(_memories[m].Input, query);
+            scores[m] = _inverseTemperature * NumOps.ToDouble(dot);
+            if (scores[m] > maxScore) maxScore = scores[m];
+        }
+
+        double sumExp = 0;
+        for (int m = 0; m < _memories.Count; m++)
+        {
+            scores[m] = Math.Exp(scores[m] - maxScore);
+            sumExp += scores[m];
+        }
+        for (int m = 0; m < _memories.Count; m++)
+            scores[m] /= (sumExp + 1e-10);
+
+        // Use cached values tensor to avoid per-call O(M×D) allocation
+        int M = _memories.Count;
+        if (_cachedValuesTensor == null || _cachedValuesTensor.Shape[0] != M)
+        {
+            _cachedValuesTensor = new Tensor<T>([M, _dimension]);
+            for (int m = 0; m < M; m++)
             {
-                bestSimilarity = similarity;
-                bestMatch = target;
+                var target = _memories[m].Target;
+                for (int d = 0; d < _dimension; d++)
+                    _cachedValuesTensor[m, d] = target[d];
             }
         }
 
-        // Blend matrix-based retrieval with buffer-based retrieval
-        if (bestMatch != null && _numOps.GreaterThan(bestSimilarity, _numOps.FromDouble(0.8)))
-        {
-            T blendFactor = _numOps.FromDouble(0.3);
-            var blended = new Vector<T>(_dimension);
+        var weights = new Tensor<T>([1, M]);
+        for (int m = 0; m < M; m++)
+            weights[0, m] = NumOps.FromDouble(scores[m]);
 
-            for (int i = 0; i < _dimension; i++)
-            {
-                T matrixPart = _numOps.Multiply(retrieved[i],
-                    _numOps.Subtract(_numOps.One, blendFactor));
-                T bufferPart = _numOps.Multiply(bestMatch[i], blendFactor);
-                blended[i] = _numOps.Add(matrixPart, bufferPart);
-            }
-
-            return blended;
-        }
-
-        return retrieved;
+        var resultTensor = Engine.TensorMatMul(weights, _cachedValuesTensor); // [1, D]
+        return resultTensor.Reshape([_dimension]).ToVector();
     }
 
     public void Update(Vector<T> input, Vector<T> target, T learningRate)
     {
+        if (input == null) throw new ArgumentNullException(nameof(input));
+        if (target == null) throw new ArgumentNullException(nameof(target));
         if (input.Length != _dimension || target.Length != _dimension)
             throw new ArgumentException("Input and target must match memory dimension");
 
-        UpdateAssociationMatrix(input, target, learningRate);
-    }
+        double lr = NumOps.ToDouble(learningRate);
+        if (lr < 0 || lr > 1 || double.IsNaN(lr) || double.IsInfinity(lr))
+            throw new ArgumentOutOfRangeException(nameof(learningRate), lr, "Learning rate must be in [0, 1].");
 
-    private void UpdateAssociationMatrix(Vector<T> input, Vector<T> target, T learningRate)
-    {
-        // Hebbian learning rule: Δw_ij = η * target_i * input_j
-        // This models how backpropagation maps data points to local errors
-        for (int i = 0; i < _dimension; i++)
+        // If a matching key already exists (cosine similarity > 0.99), blend its target
+        // instead of appending a duplicate that splits softmax attention
+        T inputNormSq = Engine.DotProduct(input, input);
+        double inputNorm = Math.Sqrt(NumOps.ToDouble(inputNormSq));
+
+        for (int m = 0; m < _memories.Count; m++)
         {
-            for (int j = 0; j < _dimension; j++)
+            var key = _memories[m].Input;
+            T dot = Engine.DotProduct(key, input);
+            T keyNormSq = Engine.DotProduct(key, key);
+            double cosine = NumOps.ToDouble(dot) / (Math.Sqrt(NumOps.ToDouble(keyNormSq)) * inputNorm + CosineEpsilon);
+
+            if (cosine > DuplicateKeyThreshold)
             {
-                T update = _numOps.Multiply(_numOps.Multiply(target[i], input[j]), learningRate);
-                _associationMatrix[i, j] = _numOps.Add(_associationMatrix[i, j], update);
+                // Blend: updated = (1-lr) * existing + lr * target
+                var existingTensor = Tensor<T>.FromVector(_memories[m].Target);
+                var targetTensor = Tensor<T>.FromVector(target);
+                T oneMinusLr = NumOps.Subtract(NumOps.One, learningRate);
+                var kept = Engine.TensorMultiplyScalar(existingTensor, oneMinusLr);
+                var added = Engine.TensorMultiplyScalar(targetTensor, learningRate);
+                var blended = Engine.TensorAdd(kept, added);
+                _memories[m] = (key, blended.ToVector());
+                _cachedAssociationMatrix = null;
+                _cachedValuesTensor = null;
+                return;
             }
         }
-    }
 
-    private T ComputeSimilarity(Vector<T> a, Vector<T> b)
-    {
-        return _numOps.FromDouble(VectorHelper.CosineSimilarity(a, b));
+        // No matching key — store full target (not scaled, since retrieval expects
+        // actual values, and learningRate only modulates blend strength for existing keys)
+        Associate(input, target);
     }
 
     public int Capacity => _capacity;
@@ -119,13 +160,38 @@ public class AssociativeMemory<T> : IAssociativeMemory<T>
     public void Clear()
     {
         _memories.Clear();
-        _associationMatrix = new Matrix<T>(_dimension, _dimension);
+        _cachedAssociationMatrix = null;
+        _cachedValuesTensor = null;
     }
 
     /// <summary>
-    /// Gets the association matrix for inspection/debugging.
+    /// Computes the Hebbian association matrix from stored memories: W = Σ target_i * input_i^T.
+    /// Cached and invalidated on Associate/Update/Clear. For diagnostics/testing only.
     /// </summary>
-    public Matrix<T> GetAssociationMatrix() => _associationMatrix;
+    public Matrix<T> GetAssociationMatrix()
+    {
+        if (_cachedAssociationMatrix == null)
+        {
+            // W = Σ target_i ⊗ input_i  (outer product sum via Engine matmul)
+            var result = new Tensor<T>([_dimension, _dimension]);
+            foreach (var (input, target) in _memories)
+            {
+                var tCol = Tensor<T>.FromVector(target).Reshape([_dimension, 1]);
+                var iRow = Tensor<T>.FromVector(input).Reshape([1, _dimension]);
+                var outer = Engine.TensorMatMul(tCol, iRow);
+                result = Engine.TensorAdd(result, outer);
+            }
+
+            var matrix = new Matrix<T>(_dimension, _dimension);
+            for (int i = 0; i < _dimension; i++)
+                for (int j = 0; j < _dimension; j++)
+                    matrix[i, j] = result[i, j];
+            _cachedAssociationMatrix = matrix;
+        }
+
+        // Return a copy so callers can't mutate the cache
+        return _cachedAssociationMatrix.Clone();
+    }
 
     /// <summary>
     /// Gets the number of stored memories.

@@ -11,6 +11,7 @@ using AiDotNet.PhysicsInformed;
 using AiDotNet.Attributes;
 using AiDotNet.Enums;
 using AiDotNet.PhysicsInformed.Options;
+using AiDotNet.Tensors.Engines.Autodiff;
 using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.PhysicsInformed.NeuralOperators
@@ -207,6 +208,8 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
             {
                 var fourierLayer = new FourierLayer<T>(_width, _modes, _spatialDimensions);
                 _fourierLayers.Add(fourierLayer);
+                // Also register in base Layers so TrainWithTape discovers their parameters
+                Layers.Add(fourierLayer);
             }
 
             // Projection layer: map back to output dimension
@@ -248,6 +251,16 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
                 throw new InvalidOperationException("This network does not support training mode");
             }
 
+            return ForwardInternal(input);
+        }
+
+        /// <summary>
+        /// Forward pass used by tape-based training. Must go through the same pointwise-reshape
+        /// path as ForwardInternal so that the gradient tape records correct operations on the
+        /// lift, Fourier, and projection layers.
+        /// </summary>
+        public override Tensor<T> ForwardForTraining(Tensor<T> input)
+        {
             return ForwardInternal(input);
         }
 
@@ -346,25 +359,8 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
 
                     for (int i = 0; i < inputFunctions.Length; i++)
                     {
-                        var prediction = ForwardWithMemory(inputFunctions[i]);
-                        var target = outputFunctions[i];
-
-                        var loss = lossFunction.CalculateLoss(prediction.ToVector(), target.ToVector());
-                        totalLoss = NumOps.Add(totalLoss, loss);
-
-                        var outputGradientVector = lossFunction.CalculateDerivative(prediction.ToVector(), target.ToVector());
-                        var outputGradient = new Tensor<T>(prediction._shape, outputGradientVector);
-
-
-                        var gradients = GetGradients();
-                        var parameters = GetParameters();
-                        if (parameters.Length > 0)
-                        {
-                            var updatedParameters = _optimizer.UpdateParameters(parameters, gradients);
-                            UpdateParameters(updatedParameters);
-                        }
-
-                        ClearGradients();
+                        Train(inputFunctions[i], outputFunctions[i]);
+                        totalLoss = NumOps.Add(totalLoss, LastLoss ?? NumOps.Zero);
                     }
 
                     T avgLoss = inputFunctions.Length > 0
@@ -456,131 +452,56 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
             return UnflattenPointwiseOutput(projected, batchSize, spatialShape);
         }
 
+        /// <summary>
+        /// Flattens a channel-first tensor <c>[B, C, d_1, ..., d_N]</c> into the
+        /// <c>[B * d_1 * ... * d_N, C]</c> row-major layout that the pointwise
+        /// DenseLayer consumes. Implemented as <c>TensorPermute + Reshape</c> so
+        /// every op records on the gradient tape — the previous element-by-element
+        /// copy loop bypassed the tape and blocked tape-based training for the FNO.
+        /// </summary>
         private Tensor<T> FlattenPointwiseInput(Tensor<T> input, int[] spatialShape)
         {
+            int rank = input.Rank;
             int batchSize = input.Shape[0];
             int channels = input.Shape[1];
             int spatialSize = spatialShape.Aggregate(1, (a, b) => a * b);
-            int[] spatialStrides = ComputeStrides(spatialShape);
 
-            var flattened = new Tensor<T>(new int[] { batchSize * spatialSize, channels });
-            var inputIndices = new int[input.Rank];
+            // Permute [B, C, d_1, ..., d_N] → [B, d_1, ..., d_N, C].
+            // axes: [0, 2, 3, ..., rank-1, 1]
+            int[] perm = new int[rank];
+            perm[0] = 0;
+            for (int d = 0; d < rank - 2; d++) perm[1 + d] = 2 + d;
+            perm[rank - 1] = 1;
+            var permuted = Engine.TensorPermute(input, perm);
 
-            for (int b = 0; b < batchSize; b++)
-            {
-                inputIndices[0] = b;
-                for (int s = 0; s < spatialSize; s++)
-                {
-                    FillSpatialIndices(s, spatialShape, spatialStrides, inputIndices, 2);
-                    int row = b * spatialSize + s;
-                    for (int c = 0; c < channels; c++)
-                    {
-                        inputIndices[1] = c;
-                        flattened[row, c] = input[inputIndices];
-                    }
-                }
-            }
-
-            return flattened;
+            return Engine.Reshape(permuted, new[] { batchSize * spatialSize, channels });
         }
 
+        /// <summary>
+        /// Inverse of <see cref="FlattenPointwiseInput"/>. Reshapes the row-major
+        /// <c>[B * spatialSize, C]</c> tensor back to <c>[B, C, d_1, ..., d_N]</c>
+        /// using <c>Reshape + TensorPermute</c> so the op chain stays on the
+        /// gradient tape.
+        /// </summary>
         private Tensor<T> UnflattenPointwiseOutput(Tensor<T> flattened, int batchSize, int[] spatialShape)
         {
             int channels = flattened.Shape[1];
-            int spatialSize = spatialShape.Aggregate(1, (a, b) => a * b);
-            int[] spatialStrides = ComputeStrides(spatialShape);
+            int spatialRank = spatialShape.Length;
 
-            int[] outputShape = new int[spatialShape.Length + 2];
-            outputShape[0] = batchSize;
-            outputShape[1] = channels;
-            Array.Copy(spatialShape, 0, outputShape, 2, spatialShape.Length);
+            // Reshape [B * spatialSize, C] → [B, d_1, ..., d_N, C].
+            int[] unflattenShape = new int[spatialRank + 2];
+            unflattenShape[0] = batchSize;
+            for (int d = 0; d < spatialRank; d++) unflattenShape[1 + d] = spatialShape[d];
+            unflattenShape[spatialRank + 1] = channels;
+            var reshaped = Engine.Reshape(flattened, unflattenShape);
 
-            var output = new Tensor<T>(outputShape);
-            var outputIndices = new int[output.Rank];
-
-            for (int b = 0; b < batchSize; b++)
-            {
-                outputIndices[0] = b;
-                for (int s = 0; s < spatialSize; s++)
-                {
-                    FillSpatialIndices(s, spatialShape, spatialStrides, outputIndices, 2);
-                    int row = b * spatialSize + s;
-                    for (int c = 0; c < channels; c++)
-                    {
-                        outputIndices[1] = c;
-                        output[outputIndices] = flattened[row, c];
-                    }
-                }
-            }
-
-            return output;
-        }
-
-        private Tensor<T> ApplyVectorActivation(Tensor<T> input, IVectorActivationFunction<T> activation)
-        {
-            int batchSize = input.Shape[0];
-            int channels = input.Shape[1];
-            int spatialRank = input.Rank - 2;
-            int[] spatialShape = input._shape.Skip(2).ToArray();
-            int spatialSize = spatialShape.Aggregate(1, (a, b) => a * b);
-            int[] spatialStrides = ComputeStrides(spatialShape);
-
-            var output = new Tensor<T>(input.Shape.ToArray());
-            var inputIndices = new int[input.Rank];
-            var outputIndices = new int[input.Rank];
-            var channelVector = new Vector<T>(channels);
-
-            for (int b = 0; b < batchSize; b++)
-            {
-                inputIndices[0] = b;
-                outputIndices[0] = b;
-
-                for (int s = 0; s < spatialSize; s++)
-                {
-                    FillSpatialIndices(s, spatialShape, spatialStrides, inputIndices, 2);
-                    FillSpatialIndices(s, spatialShape, spatialStrides, outputIndices, 2);
-
-                    for (int c = 0; c < channels; c++)
-                    {
-                        inputIndices[1] = c;
-                        channelVector[c] = input[inputIndices];
-                    }
-
-                    var activated = ActivationHelper.ApplyActivation(activation, channelVector, AiDotNetEngine.Current);
-                    for (int c = 0; c < channels; c++)
-                    {
-                        outputIndices[1] = c;
-                        output[outputIndices] = activated[c];
-                    }
-                }
-            }
-
-            return output;
-        }
-
-        private static int[] ComputeStrides(int[] shape)
-        {
-            int[] strides = new int[shape.Length];
-            int stride = 1;
-
-            for (int i = shape.Length - 1; i >= 0; i--)
-            {
-                strides[i] = stride;
-                stride *= shape[i];
-            }
-
-            return strides;
-        }
-
-        private static void FillSpatialIndices(int linearIndex, int[] shape, int[] strides, int[] indices, int offset)
-        {
-            int remaining = linearIndex;
-            for (int i = 0; i < shape.Length; i++)
-            {
-                int coord = remaining / strides[i];
-                remaining %= strides[i];
-                indices[offset + i] = coord;
-            }
+            // Permute [B, d_1, ..., d_N, C] → [B, C, d_1, ..., d_N].
+            // axes: [0, spatialRank+1, 1, 2, ..., spatialRank]
+            int[] perm = new int[spatialRank + 2];
+            perm[0] = 0;
+            perm[1] = spatialRank + 1;
+            for (int d = 0; d < spatialRank; d++) perm[2 + d] = 1 + d;
+            return Engine.TensorPermute(reshaped, perm);
         }
 
         /// <summary>
@@ -625,17 +546,6 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
                     index += layerParameterCount;
                 }
             }
-
-            foreach (var layer in _fourierLayers)
-            {
-                int layerParameterCount = layer.ParameterCount;
-                if (layerParameterCount > 0)
-                {
-                    Vector<T> layerParameters = parameters.GetSubVector(index, layerParameterCount);
-                    layer.UpdateParameters(layerParameters);
-                    index += layerParameterCount;
-                }
-            }
         }
 
         /// <summary>
@@ -647,17 +557,6 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
             int index = 0;
 
             foreach (var layer in Layers)
-            {
-                var layerParameters = layer.GetParameters();
-                for (int i = 0; i < layerParameters.Length; i++)
-                {
-                    parameters[index + i] = layerParameters[i];
-                }
-
-                index += layerParameters.Length;
-            }
-
-            foreach (var layer in _fourierLayers)
             {
                 var layerParameters = layer.GetParameters();
                 for (int i = 0; i < layerParameters.Length; i++)
@@ -687,17 +586,6 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
                 index += layerGradients.Length;
             }
 
-            foreach (var layer in _fourierLayers)
-            {
-                var layerGradients = layer.GetParameterGradients();
-                for (int i = 0; i < layerGradients.Length; i++)
-                {
-                    gradients[index + i] = layerGradients[i];
-                }
-
-                index += layerGradients.Length;
-            }
-
             return gradients;
         }
 
@@ -707,18 +595,14 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
             {
                 layer.ClearGradients();
             }
-
-            foreach (var layer in _fourierLayers)
-            {
-                layer.ClearGradients();
-            }
         }
 
         /// <summary>
         /// Gets the total parameter count for lift, Fourier, and projection layers.
+        /// Fourier layers are registered in the base Layers collection, so no separate sum needed.
         /// </summary>
         public override int ParameterCount =>
-            Layers.Sum(layer => layer.ParameterCount) + _fourierLayers.Sum(layer => layer.ParameterCount);
+            Layers.Sum(layer => layer.ParameterCount);
 
         /// <summary>
         /// Performs a basic supervised training step using MSE loss.
@@ -749,7 +633,7 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
 
             try
             {
-                TrainWithTape(input, expectedOutput);
+                TapeTrainStep(input, expectedOutput);
             }
             finally
             {
@@ -762,6 +646,117 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
                     layer.SetTrainingMode(false);
                 }
                 SetTrainingMode(false);
+            }
+        }
+
+        /// <summary>
+        /// Tape-based FNO training step. Runs the full lift → FourierLayers →
+        /// project pipeline under a <see cref="GradientTape{T}"/>, computes MSE
+        /// loss, walks the recorded ops to compute parameter gradients, and
+        /// applies an SGD update in place.
+        /// </summary>
+        /// <remarks>
+        /// The stale comment on the old ManualTrainStep said "the FNO's custom
+        /// spatial reshape breaks the gradient tape, so we use explicit
+        /// backpropagation" — that was true before <see cref="FlattenPointwiseInput"/>
+        /// / <see cref="UnflattenPointwiseOutput"/> were rewritten as
+        /// <c>TensorPermute + Reshape</c> and before <see cref="FourierLayer"/>'s
+        /// spectral conv moved to <c>Engine.FFT2D</c> / <c>Engine.FFT</c>. With
+        /// both of those in place every op in the forward pass records on the
+        /// tape, so backward just falls out of <c>tape.ComputeGradients</c>.
+        /// </remarks>
+        private void TapeTrainStep(Tensor<T> input, Tensor<T> expectedOutput)
+        {
+            ValidateInputShape(input);
+
+            var liftLayer = Layers[0] as NeuralNetworks.Layers.DenseLayer<T>;
+            var projectLayer = Layers[Layers.Count - 1] as NeuralNetworks.Layers.DenseLayer<T>;
+
+            if (liftLayer == null || projectLayer == null)
+            {
+                throw new InvalidOperationException("FNO requires DenseLayer lift and projection layers.");
+            }
+
+            int[] spatialShape = input._shape.Skip(2).ToArray();
+
+            // Collect every trainable parameter tensor across Layers (lift +
+            // project DenseLayers) and _fourierLayers. Cached between calls —
+            // layer structure is stable after construction and parameter
+            // tensors are updated in place by SetParameters.
+            var paramList = new List<Tensor<T>>();
+            foreach (var layer in Layers)
+            {
+                if (layer is ITrainableLayer<T> trainable)
+                {
+                    var layerParams = trainable.GetTrainableParameters();
+                    if (layerParams is not null)
+                    {
+                        foreach (var p in layerParams)
+                        {
+                            if (p is not null && p.Length > 0) paramList.Add(p);
+                        }
+                    }
+                }
+            }
+            foreach (var fl in _fourierLayers)
+            {
+                if (fl is ITrainableLayer<T> trainable)
+                {
+                    var layerParams = trainable.GetTrainableParameters();
+                    if (layerParams is not null)
+                    {
+                        foreach (var p in layerParams)
+                        {
+                            if (p is not null && p.Length > 0) paramList.Add(p);
+                        }
+                    }
+                }
+            }
+            var paramTensors = paramList.ToArray();
+
+            using var tape = new GradientTape<T>();
+
+            // Forward: lift → fourier stack → project. Every op is tape-tracked.
+            var liftFlat = FlattenPointwiseInput(input, spatialShape);
+            var liftOut = liftLayer.Forward(liftFlat);
+            var lifted = UnflattenPointwiseOutput(liftOut, input.Shape[0], spatialShape);
+
+            Tensor<T> x = lifted;
+            foreach (var fl in _fourierLayers)
+            {
+                x = fl.Forward(x);
+            }
+
+            var projFlat = FlattenPointwiseInput(x, spatialShape);
+            var projOut = projectLayer.Forward(projFlat);
+            var output = UnflattenPointwiseOutput(projOut, input.Shape[0], spatialShape);
+
+            // Mean squared error: mean((output - target)^2)
+            var diff = Engine.TensorSubtract(output, expectedOutput);
+            var sq = Engine.TensorMultiply(diff, diff);
+            var lossSum = Engine.ReduceSum(sq, null);
+            var invN = NumOps.Divide(NumOps.One, NumOps.FromDouble(output.Length));
+            var lossTensor = Engine.TensorMultiplyScalar(lossSum, invN);
+
+            LastLoss = lossTensor.Data.Span[0];
+
+            // Backward via the tape.
+            var grads = tape.ComputeGradients(lossTensor, paramTensors);
+
+            // SGD update in place so existing tensor references (and any
+            // engine persistent buffers registered through SetParameters) stay
+            // consistent.
+            T lr = NumOps.FromDouble(0.001);
+            foreach (var param in paramTensors)
+            {
+                if (!grads.TryGetValue(param, out var grad) || grad is null) continue;
+                var paramSpan = param.Data.Span;
+                var gradSpan = grad.Data.Span;
+                int n = Math.Min(paramSpan.Length, gradSpan.Length);
+                for (int i = 0; i < n; i++)
+                {
+                    paramSpan[i] = NumOps.Subtract(paramSpan[i], NumOps.Multiply(gradSpan[i], lr));
+                }
             }
         }
 
@@ -883,20 +878,27 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
     public class FourierLayer<T> : NeuralNetworks.Layers.LayerBase<T>
     {
         private readonly INumericOperations<T> _numOps;
-        private readonly INumericOperations<Complex<T>> _complexOps;
         private readonly int _width;
         private readonly int _modes;
         private readonly int[] _spatialDimensions;
         private readonly int[] _modeSizes;
         private readonly IActivationFunction<T> _activation;
-        private Tensor<Complex<T>> _spectralWeights;
+
+        // Split-complex spectral weights stored as two real tensors so they can
+        // participate directly in the gradient tape alongside the rest of the
+        // Engine.FFT / Engine.FFT2D pipeline. Registered as trainable parameters
+        // below in the constructor.
+        [TrainableParameter(Role = PersistentTensorRole.Weights)]
+        private Tensor<T> _spectralWeightsReal;
+
+        [TrainableParameter(Role = PersistentTensorRole.Weights)]
+        private Tensor<T> _spectralWeightsImag;
+
+        [TrainableParameter(Role = PersistentTensorRole.Weights)]
         private Tensor<T> _pointwiseWeights;
-        private Vector<T> _pointwiseBias;
-        private Tensor<T>? _lastInput;
-        private Tensor<T>? _lastPreActivation;
-        private Tensor<Complex<T>>? _spectralWeightsGradient;
-        private Tensor<T>? _pointwiseWeightsGradient;
-        private Vector<T>? _pointwiseBiasGradient;
+
+        [TrainableParameter(Role = PersistentTensorRole.Biases)]
+        private Tensor<T> _pointwiseBias;
 
         public FourierLayer(int width, int modes, int[] spatialDimensions, IActivationFunction<T>? activation = null)
             : base(new[] { width }, new[] { width })
@@ -907,50 +909,42 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
             }
 
             _numOps = MathHelper.GetNumericOperations<T>();
-            _complexOps = MathHelper.GetNumericOperations<Complex<T>>();
             _width = width;
             _modes = modes;
             _spatialDimensions = spatialDimensions.ToArray();
             _modeSizes = _spatialDimensions.Select(dim => Math.Min(_modes, dim)).ToArray();
             _activation = activation ?? new GELUActivation<T>();
 
-            _spectralWeights = new Tensor<Complex<T>>(new[] { _width, _width }.Concat(_modeSizes).ToArray());
+            var spectralShape = new[] { _width, _width }.Concat(_modeSizes).ToArray();
+            _spectralWeightsReal = new Tensor<T>(spectralShape);
+            _spectralWeightsImag = new Tensor<T>(spectralShape);
             _pointwiseWeights = new Tensor<T>(new[] { _width, _width });
-            _pointwiseBias = new Vector<T>(_width);
+            _pointwiseBias = new Tensor<T>(new[] { _width });
 
             InitializeSpectralWeights();
             InitializePointwiseWeights();
+
+            RegisterTrainableParameter(_spectralWeightsReal, PersistentTensorRole.Weights);
+            RegisterTrainableParameter(_spectralWeightsImag, PersistentTensorRole.Weights);
+            RegisterTrainableParameter(_pointwiseWeights, PersistentTensorRole.Weights);
+            RegisterTrainableParameter(_pointwiseBias, PersistentTensorRole.Biases);
         }
 
         public override bool SupportsTraining => true;
 
+        /// <summary>
+        /// Legacy scalar-learning-rate parameter update. The tape training path
+        /// (FNO.TapeTrainStep → tape.ComputeGradients → in-place SGD on the
+        /// tensor spans) bypasses this method entirely, and the hand-rolled
+        /// backward that used to populate the private <c>_*Gradient</c> fields
+        /// was removed along with those fields. Kept as a no-op so the abstract
+        /// base contract is still satisfied.
+        /// </summary>
         public override void UpdateParameters(T learningRate)
         {
-            if (_spectralWeightsGradient == null || _pointwiseWeightsGradient == null || _pointwiseBiasGradient == null)
-            {
-                throw new InvalidOperationException("Backward pass must be called before updating parameters.");
-            }
-
-            var lrComplex = new Complex<T>(learningRate, _numOps.Zero);
-            for (int i = 0; i < _spectralWeights.Length; i++)
-            {
-                var update = _complexOps.Multiply(_spectralWeightsGradient[i], lrComplex);
-                _spectralWeights[i] = _complexOps.Subtract(_spectralWeights[i], update);
-            }
-
-            for (int i = 0; i < _pointwiseWeights.Length; i++)
-            {
-                _pointwiseWeights[i] = _numOps.Subtract(
-                    _pointwiseWeights[i],
-                    _numOps.Multiply(_pointwiseWeightsGradient[i], learningRate));
-            }
-
-            for (int i = 0; i < _pointwiseBias.Length; i++)
-            {
-                _pointwiseBias[i] = _numOps.Subtract(
-                    _pointwiseBias[i],
-                    _numOps.Multiply(_pointwiseBiasGradient[i], learningRate));
-            }
+            // No-op: tape-based training updates weights via SetParameters on
+            // the split-complex _spectralWeightsReal / _spectralWeightsImag
+            // tensors (and _pointwiseWeights / _pointwiseBias) directly.
         }
 
         public override Tensor<T> Forward(Tensor<T> input)
@@ -967,189 +961,41 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
                 throw new ArgumentException($"Expected channel width {_width}, got {input.Shape[1]}.");
             }
 
-            _lastInput = input;
-            var spectral = ApplySpectralConvolution(input);
+            // Tape-tracked spectral conv using Engine.FFT* for every rank.
+            //   - 2-D: single fused Engine.FFT2D call (fast path).
+            //   - Other ranks: separable 1-D Engine.FFT loop. Will collapse into
+            //     a single Engine.FFTND call once native N-D FFT ships — see
+            //     https://github.com/ooples/AiDotNet.Tensors/issues/135.
+            // Backward flows through the FFT / FFT2D grad nodes automatically.
+            var spectral = _spatialDimensions.Length == 2
+                ? ApplySpectralConvolution2DTape(input)
+                : ApplySpectralConvolutionNDTape(input);
             var local = ApplyPointwiseMixing(input);
-            var combined = AddTensors(spectral, local);
+            var combined = Engine.TensorAdd(spectral, local);
 
-            _lastPreActivation = combined;
             return _activation.Activate(combined);
-        }
-
-        private Tensor<T> ComputePointwiseGradients(Tensor<T> input, Tensor<T> activationGradient)
-        {
-            int batchSize = input.Shape[0];
-            int spatialRank = input.Rank - 2;
-            int[] spatialShape = input._shape.Skip(2).ToArray();
-            int spatialSize = spatialShape.Aggregate(1, (a, b) => a * b);
-            int[] spatialStrides = ComputeStrides(spatialShape);
-
-            _pointwiseWeightsGradient = new Tensor<T>(new int[] { _width, _width });
-            _pointwiseWeightsGradient.Fill(_numOps.Zero);
-            _pointwiseBiasGradient = new Vector<T>(_width);
-            _pointwiseBiasGradient.Fill(_numOps.Zero);
-            var inputGradient = new Tensor<T>(input.Shape.ToArray());
-            inputGradient.Fill(_numOps.Zero);
-
-            var inputIndices = new int[input.Rank];
-            var outputIndices = new int[input.Rank];
-
-            for (int b = 0; b < batchSize; b++)
-            {
-                inputIndices[0] = b;
-                outputIndices[0] = b;
-
-                for (int s = 0; s < spatialSize; s++)
-                {
-                    FillSpatialIndices(s, spatialShape, spatialStrides, inputIndices, 2);
-                    FillSpatialIndices(s, spatialShape, spatialStrides, outputIndices, 2);
-
-                    for (int outCh = 0; outCh < _width; outCh++)
-                    {
-                        outputIndices[1] = outCh;
-                        T gradValue = activationGradient[outputIndices];
-                        _pointwiseBiasGradient[outCh] = _numOps.Add(_pointwiseBiasGradient[outCh], gradValue);
-
-                        for (int inCh = 0; inCh < _width; inCh++)
-                        {
-                            inputIndices[1] = inCh;
-                            _pointwiseWeightsGradient[outCh, inCh] = _numOps.Add(
-                                _pointwiseWeightsGradient[outCh, inCh],
-                                _numOps.Multiply(gradValue, input[inputIndices]));
-
-                            inputGradient[inputIndices] = _numOps.Add(
-                                inputGradient[inputIndices],
-                                _numOps.Multiply(gradValue, _pointwiseWeights[outCh, inCh]));
-                        }
-                    }
-                }
-            }
-
-            return inputGradient;
-        }
-
-        private Tensor<T> ComputeSpectralGradients(Tensor<T> input, Tensor<T> activationGradient)
-        {
-            var inputSpectrum = ForwardFFT(input);
-            var gradSpectrum = ForwardFFT(activationGradient);
-            var inputGradSpectrum = new Tensor<Complex<T>>(inputSpectrum.Shape.ToArray());
-            _spectralWeightsGradient = new Tensor<Complex<T>>(_spectralWeights._shape);
-
-            for (int i = 0; i < inputGradSpectrum.Length; i++)
-            {
-                inputGradSpectrum[i] = _complexOps.Zero;
-            }
-
-            for (int i = 0; i < _spectralWeightsGradient.Length; i++)
-            {
-                _spectralWeightsGradient[i] = _complexOps.Zero;
-            }
-
-            int batchSize = input.Shape[0];
-            int spatialRank = _spatialDimensions.Length;
-            int[] spatialShape = input._shape.Skip(2).ToArray();
-            int[][] modeIndices = BuildModeIndices(spatialShape);
-
-            int[] freqIndices = new int[spatialRank];
-            int[] spectrumIndices = new int[spatialRank + 2];
-            int[] gradIndices = new int[spatialRank + 2];
-            int[] weightIndices = new int[spatialRank + 2];
-
-            for (int b = 0; b < batchSize; b++)
-            {
-                spectrumIndices[0] = b;
-                gradIndices[0] = b;
-
-                IterateModeIndices(modeIndices, 0, freqIndices, () =>
-                {
-                    for (int d = 0; d < spatialRank; d++)
-                    {
-                        spectrumIndices[2 + d] = freqIndices[d];
-                        gradIndices[2 + d] = freqIndices[d];
-                    }
-
-                    for (int outCh = 0; outCh < _width; outCh++)
-                    {
-                        gradIndices[1] = outCh;
-                        var gradOut = gradSpectrum[gradIndices];
-                        weightIndices[0] = outCh;
-
-                        for (int inCh = 0; inCh < _width; inCh++)
-                        {
-                            spectrumIndices[1] = inCh;
-                            weightIndices[1] = inCh;
-
-                            bool valid = true;
-                            for (int d = 0; d < spatialRank; d++)
-                            {
-                                int modeIndex = MapModeIndex(freqIndices[d], spatialShape[d], _modeSizes[d]);
-                                if (modeIndex < 0)
-                                {
-                                    valid = false;
-                                    break;
-                                }
-
-                                weightIndices[2 + d] = modeIndex;
-                            }
-
-                            if (!valid)
-                            {
-                                continue;
-                            }
-
-                            var inputValue = inputSpectrum[spectrumIndices];
-                            var weight = _spectralWeights[weightIndices];
-
-                            _spectralWeightsGradient[weightIndices] = _complexOps.Add(
-                                _spectralWeightsGradient[weightIndices],
-                                _complexOps.Multiply(inputValue.Conjugate(), gradOut));
-
-                            inputGradSpectrum[spectrumIndices] = _complexOps.Add(
-                                inputGradSpectrum[spectrumIndices],
-                                _complexOps.Multiply(gradOut, weight.Conjugate()));
-                        }
-                    }
-                });
-            }
-
-            var inputGradComplex = InverseFFT(inputGradSpectrum);
-            var inputGradient = new Tensor<T>(input.Shape.ToArray());
-            for (int i = 0; i < inputGradient.Length; i++)
-            {
-                inputGradient[i] = inputGradComplex[i].Real;
-            }
-
-            return inputGradient;
         }
 
         public override Vector<T> GetParameters()
         {
-            int spectralCount = _spectralWeights.Length;
+            int spectralCount = _spectralWeightsReal.Length;
             int pointwiseCount = _pointwiseWeights.Length;
             int biasCount = _pointwiseBias.Length;
 
             var parameters = new Vector<T>(spectralCount * 2 + pointwiseCount + biasCount);
             int index = 0;
 
-            for (int i = 0; i < spectralCount; i++)
-            {
-                parameters[index++] = _spectralWeights[i].Real;
-            }
+            // Layout: [real spectral weights, imag spectral weights, pointwise weights, pointwise bias].
+            var realSpan = _spectralWeightsReal.Data.Span;
+            var imagSpan = _spectralWeightsImag.Data.Span;
+            for (int i = 0; i < spectralCount; i++) parameters[index++] = realSpan[i];
+            for (int i = 0; i < spectralCount; i++) parameters[index++] = imagSpan[i];
 
-            for (int i = 0; i < spectralCount; i++)
-            {
-                parameters[index++] = _spectralWeights[i].Imaginary;
-            }
+            var pointwiseSpan = _pointwiseWeights.Data.Span;
+            for (int i = 0; i < pointwiseCount; i++) parameters[index++] = pointwiseSpan[i];
 
-            for (int i = 0; i < pointwiseCount; i++)
-            {
-                parameters[index++] = _pointwiseWeights[i];
-            }
-
-            for (int i = 0; i < biasCount; i++)
-            {
-                parameters[index++] = _pointwiseBias[i];
-            }
+            var biasSpan = _pointwiseBias.Data.Span;
+            for (int i = 0; i < biasCount; i++) parameters[index++] = biasSpan[i];
 
             return parameters;
         }
@@ -1161,109 +1007,48 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
                 throw new ArgumentException($"Expected {ParameterCount} parameters, got {parameters.Length}.");
             }
 
-            int spectralCount = _spectralWeights.Length;
+            int spectralCount = _spectralWeightsReal.Length;
             int pointwiseCount = _pointwiseWeights.Length;
             int biasCount = _pointwiseBias.Length;
             int index = 0;
 
-            var realParts = new T[spectralCount];
-            for (int i = 0; i < spectralCount; i++)
-            {
-                realParts[i] = parameters[index++];
-            }
+            // Write in place so engine persistent tensor references stay valid.
+            var realSpan = _spectralWeightsReal.Data.Span;
+            var imagSpan = _spectralWeightsImag.Data.Span;
+            for (int i = 0; i < spectralCount; i++) realSpan[i] = parameters[index++];
+            for (int i = 0; i < spectralCount; i++) imagSpan[i] = parameters[index++];
 
-            for (int i = 0; i < spectralCount; i++)
-            {
-                _spectralWeights[i] = new Complex<T>(realParts[i], parameters[index++]);
-            }
+            var pointwiseSpan = _pointwiseWeights.Data.Span;
+            for (int i = 0; i < pointwiseCount; i++) pointwiseSpan[i] = parameters[index++];
 
-            for (int i = 0; i < pointwiseCount; i++)
-            {
-                _pointwiseWeights[i] = parameters[index++];
-            }
+            var biasSpan = _pointwiseBias.Data.Span;
+            for (int i = 0; i < biasCount; i++) biasSpan[i] = parameters[index++];
 
-            for (int i = 0; i < biasCount; i++)
-            {
-                _pointwiseBias[i] = parameters[index++];
-            }
+            Engine.InvalidatePersistentTensor(_spectralWeightsReal);
+            Engine.InvalidatePersistentTensor(_spectralWeightsImag);
+            Engine.InvalidatePersistentTensor(_pointwiseWeights);
+            Engine.InvalidatePersistentTensor(_pointwiseBias);
         }
 
         public override Vector<T> GetParameterGradients()
         {
-            if (_spectralWeightsGradient == null || _pointwiseWeightsGradient == null || _pointwiseBiasGradient == null)
-            {
-                return new Vector<T>(ParameterCount);
-            }
-
-            int spectralCount = _spectralWeightsGradient.Length;
-            int pointwiseCount = _pointwiseWeightsGradient.Length;
-            int biasCount = _pointwiseBiasGradient.Length;
-
-            var gradients = new Vector<T>(spectralCount * 2 + pointwiseCount + biasCount);
-            int index = 0;
-
-            for (int i = 0; i < spectralCount; i++)
-            {
-                gradients[index++] = _spectralWeightsGradient[i].Real;
-            }
-
-            for (int i = 0; i < spectralCount; i++)
-            {
-                gradients[index++] = _spectralWeightsGradient[i].Imaginary;
-            }
-
-            for (int i = 0; i < pointwiseCount; i++)
-            {
-                gradients[index++] = _pointwiseWeightsGradient[i];
-            }
-
-            for (int i = 0; i < biasCount; i++)
-            {
-                gradients[index++] = _pointwiseBiasGradient[i];
-            }
-
-            return gradients;
+            // Tape-based training computes gradients through GradientTape<T> on
+            // each forward call and applies them immediately — no persistent
+            // gradient buffers are maintained here.
+            return new Vector<T>(ParameterCount);
         }
 
         public override void ClearGradients()
         {
-            if (_spectralWeightsGradient != null)
-            {
-                for (int i = 0; i < _spectralWeightsGradient.Length; i++)
-                {
-                    _spectralWeightsGradient[i] = _complexOps.Zero;
-                }
-            }
-
-            if (_pointwiseWeightsGradient != null)
-            {
-                _pointwiseWeightsGradient.Fill(_numOps.Zero);
-            }
-
-            if (_pointwiseBiasGradient != null)
-            {
-                _pointwiseBiasGradient.Fill(_numOps.Zero);
-            }
+            // No-op: see GetParameterGradients — no persistent gradient buffers.
         }
 
-        public override int ParameterCount
-        {
-            get
-            {
-                int spectralCount = _spectralWeights.Length;
-                int pointwiseCount = _pointwiseWeights.Length;
-                int biasCount = _pointwiseBias.Length;
-                return spectralCount * 2 + pointwiseCount + biasCount;
-            }
-        }
+        public override int ParameterCount =>
+            _spectralWeightsReal.Length * 2 + _pointwiseWeights.Length + _pointwiseBias.Length;
 
         public override void ResetState()
         {
-            _lastInput = null;
-            _lastPreActivation = null;
-            _spectralWeightsGradient = null;
-            _pointwiseWeightsGradient = null;
-            _pointwiseBiasGradient = null;
+            // No cached state — tape owns the gradient graph for the current forward.
         }
 
         private void InitializeSpectralWeights()
@@ -1272,11 +1057,12 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
             double scale = 1.0 / Math.Max(1, _width);
             T scaleValue = _numOps.FromDouble(scale);
 
-            for (int i = 0; i < _spectralWeights.Length; i++)
+            var realSpan = _spectralWeightsReal.Data.Span;
+            var imagSpan = _spectralWeightsImag.Data.Span;
+            for (int i = 0; i < realSpan.Length; i++)
             {
-                T real = _numOps.Multiply(_numOps.FromDouble(random.NextDouble() * 2.0 - 1.0), scaleValue);
-                T imag = _numOps.Multiply(_numOps.FromDouble(random.NextDouble() * 2.0 - 1.0), scaleValue);
-                _spectralWeights[i] = new Complex<T>(real, imag);
+                realSpan[i] = _numOps.Multiply(_numOps.FromDouble(random.NextDouble() * 2.0 - 1.0), scaleValue);
+                imagSpan[i] = _numOps.Multiply(_numOps.FromDouble(random.NextDouble() * 2.0 - 1.0), scaleValue);
             }
         }
 
@@ -1286,391 +1072,369 @@ namespace AiDotNet.PhysicsInformed.NeuralOperators
             double scale = 1.0 / Math.Max(1, _width);
             T scaleValue = _numOps.FromDouble(scale);
 
-            for (int i = 0; i < _pointwiseWeights.Length; i++)
+            var weightsSpan = _pointwiseWeights.Data.Span;
+            for (int i = 0; i < weightsSpan.Length; i++)
             {
-                _pointwiseWeights[i] = _numOps.Multiply(
+                weightsSpan[i] = _numOps.Multiply(
                     _numOps.FromDouble(random.NextDouble() * 2.0 - 1.0),
                     scaleValue);
             }
 
-            for (int i = 0; i < _pointwiseBias.Length; i++)
+            var biasSpan = _pointwiseBias.Data.Span;
+            for (int i = 0; i < biasSpan.Length; i++)
             {
-                _pointwiseBias[i] = _numOps.Zero;
+                biasSpan[i] = _numOps.Zero;
             }
         }
 
-        private Tensor<T> ApplySpectralConvolution(Tensor<T> input)
+
+        /// <summary>
+        /// Tape-tracked spectral convolution for the 2D case using Engine.FFT2D.
+        /// Replaces the hand-rolled ForwardFFT / mode-index loop in
+        /// <see cref="ApplySpectralConvolution"/> when the input has exactly 2
+        /// spatial dimensions, which is the common FNO use case (Navier-Stokes,
+        /// Darcy flow, 2D weather). Every op records on the gradient tape so
+        /// backward propagates through Engine.FFT2D's grad node automatically —
+        /// no manual Backward needed for this path.
+        /// </summary>
+        private Tensor<T> ApplySpectralConvolution2DTape(Tensor<T> input)
         {
-            var spectrum = ForwardFFT(input);
-            var outputSpectrum = new Tensor<Complex<T>>(spectrum.Shape.ToArray());
-
-            for (int i = 0; i < outputSpectrum.Length; i++)
-            {
-                outputSpectrum[i] = _complexOps.Zero;
-            }
-
             int batchSize = input.Shape[0];
-            int spatialRank = _spatialDimensions.Length;
-            int[] spatialShape = input._shape.Skip(2).ToArray();
-            int[][] modeIndices = BuildModeIndices(spatialShape);
+            int height = input.Shape[2];
+            int width = input.Shape[3];
+            int modesH = _modeSizes[0];
+            int modesW = _modeSizes[1];
 
-            int[] freqIndices = new int[spatialRank];
-            int[] spectrumIndices = new int[spatialRank + 2];
-            int[] outputIndices = new int[spatialRank + 2];
-            int[] weightIndices = new int[spatialRank + 2];
+            // Real input → zero imaginary companion for FFT2D's split-complex API.
+            var inputImag = new Tensor<T>(input._shape);
+            inputImag.Fill(_numOps.Zero);
 
-            for (int b = 0; b < batchSize; b++)
+            // Forward FFT over the last two spatial axes.
+            Engine.FFT2D(input, inputImag, out var specRe, out var specIm);
+
+            // Output spectrum starts as zeros — scatter sums the active corners.
+            var outSpecRe = new Tensor<T>(specRe._shape);
+            var outSpecIm = new Tensor<T>(specIm._shape);
+            outSpecRe.Fill(_numOps.Zero);
+            outSpecIm.Fill(_numOps.Zero);
+
+            // FNO keeps the low-frequency corner [0..modes-1] AND the high-frequency
+            // (negative-frequency via DFT symmetry) corner [H-modes..H-1] on each
+            // spatial axis. In 2D that is 4 corners. Each corner reuses the same
+            // compact weights via the MapModeIndex folding in the legacy code;
+            // we match that behavior exactly.
+            for (int cornerH = 0; cornerH < 2; cornerH++)
             {
-                spectrumIndices[0] = b;
-                outputIndices[0] = b;
+                int hStart = cornerH == 0 ? 0 : height - modesH;
+                if (hStart < 0 || hStart + modesH > height) continue;
 
-                IterateModeIndices(modeIndices, 0, freqIndices, () =>
+                for (int cornerW = 0; cornerW < 2; cornerW++)
                 {
-                    for (int d = 0; d < spatialRank; d++)
-                    {
-                        spectrumIndices[2 + d] = freqIndices[d];
-                        outputIndices[2 + d] = freqIndices[d];
-                    }
+                    int wStart = cornerW == 0 ? 0 : width - modesW;
+                    if (wStart < 0 || wStart + modesW > width) continue;
 
-                    for (int outCh = 0; outCh < _width; outCh++)
-                    {
-                        Complex<T> sum = _complexOps.Zero;
-                        outputIndices[1] = outCh;
-                        weightIndices[0] = outCh;
+                    var sliceStart = new[] { 0, 0, hStart, wStart };
+                    var sliceSize = new[] { batchSize, _width, modesH, modesW };
 
-                        for (int inCh = 0; inCh < _width; inCh++)
-                        {
-                            spectrumIndices[1] = inCh;
-                            weightIndices[1] = inCh;
+                    var inBlockRe = Engine.TensorSlice(specRe, sliceStart, sliceSize);
+                    var inBlockIm = Engine.TensorSlice(specIm, sliceStart, sliceSize);
 
-                            for (int d = 0; d < spatialRank; d++)
-                            {
-                                int modeIndex = MapModeIndex(freqIndices[d], spatialShape[d], _modeSizes[d]);
-                                weightIndices[2 + d] = modeIndex;
-                            }
+                    // Per-location complex matmul:
+                    //   (aR + aI*i)(wR + wI*i) = (aR*wR - aI*wI) + (aR*wI + aI*wR)*i
+                    // each real matmul is PerLocationMatMul which reduces over the
+                    // input-channel axis.
+                    var arWr = PerLocationMatMul(inBlockRe, _spectralWeightsReal, batchSize, _width, _width, modesH, modesW);
+                    var aiWi = PerLocationMatMul(inBlockIm, _spectralWeightsImag, batchSize, _width, _width, modesH, modesW);
+                    var arWi = PerLocationMatMul(inBlockRe, _spectralWeightsImag, batchSize, _width, _width, modesH, modesW);
+                    var aiWr = PerLocationMatMul(inBlockIm, _spectralWeightsReal, batchSize, _width, _width, modesH, modesW);
 
-                            var weight = _spectralWeights[weightIndices];
-                            var value = spectrum[spectrumIndices];
-                            sum = _complexOps.Add(sum, _complexOps.Multiply(value, weight));
-                        }
+                    var outBlockRe = Engine.TensorSubtract(arWr, aiWi);
+                    var outBlockIm = Engine.TensorAdd(arWi, aiWr);
 
-                        outputSpectrum[outputIndices] = sum;
-                    }
-                });
+                    outSpecRe = Engine.TensorSetSlice(outSpecRe, outBlockRe, sliceStart);
+                    outSpecIm = Engine.TensorSetSlice(outSpecIm, outBlockIm, sliceStart);
+                }
             }
 
-            var spatialComplex = InverseFFT(outputSpectrum);
-            var output = new Tensor<T>(input.Shape.ToArray());
-            for (int i = 0; i < output.Length; i++)
-            {
-                output[i] = spatialComplex[i].Real;
-            }
-
-            return output;
+            // Inverse FFT back to spatial. Imaginary part should be numerically
+            // near zero for a real-roundtrip signal; we return the real part.
+            Engine.IFFT2D(outSpecRe, outSpecIm, out var spatialRe, out _);
+            return spatialRe;
         }
 
+        /// <summary>
+        /// Per-frequency batched matmul used by the 2D spectral conv. For each
+        /// spatial location (h, w) the compact weight tensor <c>[C_out, C_in]</c>
+        /// is applied to the <c>[B, C_in]</c> input slice producing <c>[B, C_out]</c>,
+        /// reducing over the input-channel axis. Implemented as a single
+        /// <c>TensorBatchMatMul</c> with <c>(mh * mw)</c> batch dims after
+        /// permuting the location axes to the front.
+        /// </summary>
+        private Tensor<T> PerLocationMatMul(
+            Tensor<T> input, Tensor<T> weights,
+            int batchSize, int inChannels, int outChannels,
+            int modesH, int modesW)
+        {
+            // input   [B, C_in, mh, mw]  → permute to [mh, mw, B, C_in]  → reshape [mh*mw, B, C_in]
+            var inputPermuted = Engine.TensorPermute(input, new[] { 2, 3, 0, 1 });
+            var inputBatched = Engine.Reshape(inputPermuted, new[] { modesH * modesW, batchSize, inChannels });
+
+            // weights [C_out, C_in, mh, mw] → permute to [mh, mw, C_in, C_out] → reshape [mh*mw, C_in, C_out]
+            var weightsPermuted = Engine.TensorPermute(weights, new[] { 2, 3, 1, 0 });
+            var weightsBatched = Engine.Reshape(weightsPermuted, new[] { modesH * modesW, inChannels, outChannels });
+
+            // Batched matmul: [mh*mw, B, C_in] @ [mh*mw, C_in, C_out] → [mh*mw, B, C_out]
+            var resultBatched = Engine.TensorBatchMatMul(inputBatched, weightsBatched);
+
+            // [mh*mw, B, C_out] → [mh, mw, B, C_out] → permute to [B, C_out, mh, mw]
+            var resultUnbatched = Engine.Reshape(resultBatched, new[] { modesH, modesW, batchSize, outChannels });
+            return Engine.TensorPermute(resultUnbatched, new[] { 2, 3, 0, 1 });
+        }
+
+        /// <summary>
+        /// N-D generalization of <see cref="PerLocationMatMul"/>. Applies compact
+        /// per-frequency weights <c>[C_out, C_in, m_1, ..., m_N]</c> to an input
+        /// block <c>[B, C_in, m_1, ..., m_N]</c> producing <c>[B, C_out, m_1, ..., m_N]</c>
+        /// by treating the <c>N</c> spatial location axes as a flattened batch for
+        /// <c>TensorBatchMatMul</c>.
+        /// </summary>
+        private Tensor<T> PerLocationMatMulND(
+            Tensor<T> input, Tensor<T> weights,
+            int batchSize, int inChannels, int outChannels,
+            int[] modeShape)
+        {
+            int nSpatial = modeShape.Length;
+            int rank = nSpatial + 2;
+            int modeTotal = 1;
+            for (int d = 0; d < nSpatial; d++) modeTotal *= modeShape[d];
+
+            // Permute input [B, C_in, m_1, ..., m_N] → [m_1, ..., m_N, B, C_in]
+            // axes: [2, 3, ..., rank-1, 0, 1]
+            int[] inputPerm = new int[rank];
+            for (int d = 0; d < nSpatial; d++) inputPerm[d] = 2 + d;
+            inputPerm[nSpatial] = 0;
+            inputPerm[nSpatial + 1] = 1;
+            var inputPermuted = Engine.TensorPermute(input, inputPerm);
+            var inputBatched = Engine.Reshape(inputPermuted, new[] { modeTotal, batchSize, inChannels });
+
+            // Permute weights [C_out, C_in, m_1, ..., m_N] → [m_1, ..., m_N, C_in, C_out]
+            // axes: [2, 3, ..., rank-1, 1, 0]
+            int[] weightPerm = new int[rank];
+            for (int d = 0; d < nSpatial; d++) weightPerm[d] = 2 + d;
+            weightPerm[nSpatial] = 1;
+            weightPerm[nSpatial + 1] = 0;
+            var weightsPermuted = Engine.TensorPermute(weights, weightPerm);
+            var weightsBatched = Engine.Reshape(weightsPermuted, new[] { modeTotal, inChannels, outChannels });
+
+            // Batched matmul: [modeTotal, B, C_in] @ [modeTotal, C_in, C_out] → [modeTotal, B, C_out]
+            var resultBatched = Engine.TensorBatchMatMul(inputBatched, weightsBatched);
+
+            // Reshape [modeTotal, B, C_out] → [m_1, ..., m_N, B, C_out]
+            int[] unbatchedShape = new int[rank];
+            for (int d = 0; d < nSpatial; d++) unbatchedShape[d] = modeShape[d];
+            unbatchedShape[nSpatial] = batchSize;
+            unbatchedShape[nSpatial + 1] = outChannels;
+            var resultUnbatched = Engine.Reshape(resultBatched, unbatchedShape);
+
+            // Permute back: [m_1, ..., m_N, B, C_out] → [B, C_out, m_1, ..., m_N]
+            // axes: [rank-2, rank-1, 0, 1, ..., nSpatial-1]
+            int[] outPerm = new int[rank];
+            outPerm[0] = nSpatial;
+            outPerm[1] = nSpatial + 1;
+            for (int d = 0; d < nSpatial; d++) outPerm[2 + d] = d;
+            return Engine.TensorPermute(resultUnbatched, outPerm);
+        }
+
+        /// <summary>
+        /// Applies an N-D forward or inverse FFT as a sequence of 1-D
+        /// <c>Engine.FFT</c> / <c>Engine.IFFT</c> calls, one per spatial axis.
+        /// Each call transforms the last axis, so we permute the target axis
+        /// into the last position before each call and permute back afterward.
+        /// All ops record on the gradient tape. This is the interim separable
+        /// implementation — once native <c>FFTND</c> / <c>IFFTND</c> ship
+        /// (<see href="https://github.com/ooples/AiDotNet.Tensors/issues/135">
+        /// AiDotNet.Tensors#135</see>) this method becomes a single engine call.
+        /// </summary>
+        private (Tensor<T> real, Tensor<T> imag) ApplySeparableFft(
+            Tensor<T> inputReal, Tensor<T> inputImag, bool inverse)
+        {
+            int rank = inputReal.Rank;
+            Tensor<T> re = inputReal;
+            Tensor<T> im = inputImag;
+
+            for (int axis = 2; axis < rank; axis++)
+            {
+                // Build the permutation that moves `axis` to the last position
+                // while preserving the relative order of the other axes.
+                int[] perm = new int[rank];
+                int[] invPerm = new int[rank];
+                int idx = 0;
+                for (int d = 0; d < rank; d++)
+                {
+                    if (d != axis)
+                    {
+                        perm[idx++] = d;
+                    }
+                }
+                perm[rank - 1] = axis;
+                for (int d = 0; d < rank; d++)
+                {
+                    invPerm[perm[d]] = d;
+                }
+
+                var rePerm = Engine.TensorPermute(re, perm);
+                var imPerm = Engine.TensorPermute(im, perm);
+
+                Tensor<T> newRe;
+                Tensor<T> newIm;
+                if (inverse)
+                {
+                    Engine.IFFT(rePerm, imPerm, out newRe, out newIm);
+                }
+                else
+                {
+                    Engine.FFT(rePerm, imPerm, out newRe, out newIm);
+                }
+
+                re = Engine.TensorPermute(newRe, invPerm);
+                im = Engine.TensorPermute(newIm, invPerm);
+            }
+
+            return (re, im);
+        }
+
+        /// <summary>
+        /// Tape-tracked spectral convolution for arbitrary spatial rank. Uses
+        /// separable 1-D <c>Engine.FFT</c> / <c>Engine.IFFT</c> over each spatial
+        /// axis, then iterates the <c>2^N</c> mode corners, slicing out the
+        /// compact block, running the four-real-op complex matmul, and scattering
+        /// the result back into a zero-filled output spectrum. The 2-D case goes
+        /// through <see cref="ApplySpectralConvolution2DTape"/> instead, which
+        /// uses native <c>Engine.FFT2D</c> as a faster fused call.
+        /// </summary>
+        private Tensor<T> ApplySpectralConvolutionNDTape(Tensor<T> input)
+        {
+            int rank = input.Rank;
+            int nSpatial = rank - 2;
+            int batchSize = input.Shape[0];
+            int[] spatialShape = input._shape.Skip(2).ToArray();
+            int[] modeShape = new int[nSpatial];
+            for (int d = 0; d < nSpatial; d++)
+            {
+                modeShape[d] = Math.Min(_modeSizes[d], spatialShape[d]);
+            }
+
+            // Real input → zero imaginary companion for the FFT's split-complex API.
+            var inputImag = new Tensor<T>(input._shape);
+            inputImag.Fill(_numOps.Zero);
+
+            var (specRe, specIm) = ApplySeparableFft(input, inputImag, inverse: false);
+
+            var outSpecRe = new Tensor<T>(specRe._shape);
+            var outSpecIm = new Tensor<T>(specIm._shape);
+            outSpecRe.Fill(_numOps.Zero);
+            outSpecIm.Fill(_numOps.Zero);
+
+            // 2^nSpatial mode corners. For each corner a bit i chooses the low
+            // frequencies [0..modes-1] on axis i when 0 or the high frequencies
+            // [dim-modes..dim-1] when 1. This mirrors the legacy BuildModeIndices
+            // behavior exactly — it keeps both positive and negative frequencies.
+            int cornerCount = 1 << nSpatial;
+            for (int corner = 0; corner < cornerCount; corner++)
+            {
+                int[] sliceStart = new int[rank];
+                int[] sliceSize = new int[rank];
+                sliceStart[0] = 0;
+                sliceStart[1] = 0;
+                sliceSize[0] = batchSize;
+                sliceSize[1] = _width;
+
+                bool validCorner = true;
+                for (int d = 0; d < nSpatial; d++)
+                {
+                    bool useHigh = ((corner >> d) & 1) == 1;
+                    int start = useHigh ? spatialShape[d] - modeShape[d] : 0;
+                    if (start < 0 || start + modeShape[d] > spatialShape[d])
+                    {
+                        validCorner = false;
+                        break;
+                    }
+
+                    sliceStart[2 + d] = start;
+                    sliceSize[2 + d] = modeShape[d];
+                }
+
+                if (!validCorner) continue;
+
+                var inBlockRe = Engine.TensorSlice(specRe, sliceStart, sliceSize);
+                var inBlockIm = Engine.TensorSlice(specIm, sliceStart, sliceSize);
+
+                var arWr = PerLocationMatMulND(inBlockRe, _spectralWeightsReal, batchSize, _width, _width, modeShape);
+                var aiWi = PerLocationMatMulND(inBlockIm, _spectralWeightsImag, batchSize, _width, _width, modeShape);
+                var arWi = PerLocationMatMulND(inBlockRe, _spectralWeightsImag, batchSize, _width, _width, modeShape);
+                var aiWr = PerLocationMatMulND(inBlockIm, _spectralWeightsReal, batchSize, _width, _width, modeShape);
+
+                var outBlockRe = Engine.TensorSubtract(arWr, aiWi);
+                var outBlockIm = Engine.TensorAdd(arWi, aiWr);
+
+                outSpecRe = Engine.TensorSetSlice(outSpecRe, outBlockRe, sliceStart);
+                outSpecIm = Engine.TensorSetSlice(outSpecIm, outBlockIm, sliceStart);
+            }
+
+            var (spatialRe, _) = ApplySeparableFft(outSpecRe, outSpecIm, inverse: true);
+            return spatialRe;
+        }
+
+        /// <summary>
+        /// Tape-tracked 1×1 pointwise mixing across the channel axis.
+        /// Implements <c>output[b, oc, ...spatial] = bias[oc] + sum_ic(W[oc, ic] * input[b, ic, ...spatial])</c>
+        /// as permute → reshape → MatMul(W^T) → broadcast-add(bias) → reshape → permute,
+        /// so every op records on the gradient tape. Previous implementation was an
+        /// element-by-element triple loop that allocated a detached output tensor and
+        /// broke the gradient tape connection to the pointwise weights and bias.
+        /// </summary>
         private Tensor<T> ApplyPointwiseMixing(Tensor<T> input)
         {
+            int rank = input.Rank;
             int batchSize = input.Shape[0];
-            int spatialRank = input.Rank - 2;
             int[] spatialShape = input._shape.Skip(2).ToArray();
             int spatialSize = spatialShape.Aggregate(1, (a, b) => a * b);
-            int[] spatialStrides = ComputeStrides(spatialShape);
+            int flatRows = batchSize * spatialSize;
 
-            var output = new Tensor<T>(input.Shape.ToArray());
-            var inputIndices = new int[input.Rank];
-            var outputIndices = new int[input.Rank];
+            // [B, C_in, d_1, ..., d_N] → [B, d_1, ..., d_N, C_in]
+            // perm axes: [0, 2, 3, ..., rank-1, 1]
+            int[] toFlatPerm = new int[rank];
+            toFlatPerm[0] = 0;
+            for (int d = 0; d < rank - 2; d++) toFlatPerm[1 + d] = 2 + d;
+            toFlatPerm[rank - 1] = 1;
+            var permuted = Engine.TensorPermute(input, toFlatPerm);
 
-            for (int b = 0; b < batchSize; b++)
-            {
-                inputIndices[0] = b;
-                outputIndices[0] = b;
+            // [B, d_1, ..., d_N, C_in] → [B * spatialSize, C_in]
+            var flat = Engine.Reshape(permuted, new[] { flatRows, _width });
 
-                for (int s = 0; s < spatialSize; s++)
-                {
-                    FillSpatialIndices(s, spatialShape, spatialStrides, inputIndices, 2);
-                    FillSpatialIndices(s, spatialShape, spatialStrides, outputIndices, 2);
+            // Weights stored as [C_out, C_in] — need [C_in, C_out] for the matmul.
+            var weightsT = Engine.TensorPermute(_pointwiseWeights, new[] { 1, 0 });
 
-                    for (int outCh = 0; outCh < _width; outCh++)
-                    {
-                        T sum = _pointwiseBias[outCh];
-                        for (int inCh = 0; inCh < _width; inCh++)
-                        {
-                            inputIndices[1] = inCh;
-                            sum = _numOps.Add(sum, _numOps.Multiply(_pointwiseWeights[outCh, inCh], input[inputIndices]));
-                        }
+            // [B*S, C_in] @ [C_in, C_out] → [B*S, C_out]
+            var matmul = Engine.TensorMatMul(flat, weightsT);
 
-                        outputIndices[1] = outCh;
-                        output[outputIndices] = sum;
-                    }
-                }
-            }
+            // Bias shape [C_out] broadcasts across the B*S rows.
+            var biased = Engine.TensorBroadcastAdd(matmul, _pointwiseBias);
 
-            return output;
-        }
+            // [B*S, C_out] → [B, d_1, ..., d_N, C_out]
+            int[] unflatShape = new int[rank];
+            unflatShape[0] = batchSize;
+            for (int d = 0; d < rank - 2; d++) unflatShape[1 + d] = spatialShape[d];
+            unflatShape[rank - 1] = _width;
+            var unflat = Engine.Reshape(biased, unflatShape);
 
-        private Tensor<T> AddTensors(Tensor<T> left, Tensor<T> right)
-        {
-            return Engine.TensorAdd(left, right);
-        }
-
-        private Tensor<Complex<T>> ForwardFFT(Tensor<T> input)
-        {
-            var complex = new Tensor<Complex<T>>(input.Shape.ToArray());
-            for (int i = 0; i < input.Length; i++)
-            {
-                complex[i] = new Complex<T>(input[i], _numOps.Zero);
-            }
-
-            ApplyFft(complex, inverse: false);
-            return complex;
-        }
-
-        private Tensor<Complex<T>> InverseFFT(Tensor<Complex<T>> input)
-        {
-            var output = input.Clone();
-            ApplyFft(output, inverse: true);
-            return output;
-        }
-
-        private void ApplyFft(Tensor<Complex<T>> data, bool inverse)
-        {
-            for (int axis = 2; axis < data.Rank; axis++)
-            {
-                ApplyFftAlongAxis(data, axis, inverse);
-            }
-        }
-
-        private void ApplyFftAlongAxis(Tensor<Complex<T>> data, int axis, bool inverse)
-        {
-            int rank = data.Rank;
-            int axisSize = data.Shape[axis];
-            if (axisSize <= 1)
-            {
-                return;
-            }
-
-            var otherDims = new int[rank - 1];
-            var otherDimIndices = new int[rank - 1];
-            int idx = 0;
-            for (int d = 0; d < rank; d++)
-            {
-                if (d == axis)
-                {
-                    continue;
-                }
-
-                otherDims[idx] = data.Shape[d];
-                otherDimIndices[idx] = d;
-                idx++;
-            }
-
-            int[] otherStrides = ComputeStrides(otherDims);
-            int outerSize = otherDims.Aggregate(1, (a, b) => a * b);
-            var indices = new int[rank];
-
-            for (int outer = 0; outer < outerSize; outer++)
-            {
-                int remaining = outer;
-                for (int i = 0; i < otherDims.Length; i++)
-                {
-                    int coord = remaining / otherStrides[i];
-                    remaining %= otherStrides[i];
-                    indices[otherDimIndices[i]] = coord;
-                }
-
-                var slice = new Vector<Complex<T>>(axisSize);
-                for (int i = 0; i < axisSize; i++)
-                {
-                    indices[axis] = i;
-                    slice[i] = data[indices];
-                }
-
-                var transformed = inverse ? InverseFft1D(slice) : ForwardFft1D(slice);
-                for (int i = 0; i < axisSize; i++)
-                {
-                    indices[axis] = i;
-                    data[indices] = transformed[i];
-                }
-            }
-        }
-
-        private Vector<Complex<T>> ForwardFft1D(Vector<Complex<T>> input)
-        {
-            if (!IsPowerOfTwo(input.Length))
-            {
-                return Dft(input, inverse: false);
-            }
-
-            return FFTInternal(input, inverse: false);
-        }
-
-        private Vector<Complex<T>> InverseFft1D(Vector<Complex<T>> input)
-        {
-            Vector<Complex<T>> output = IsPowerOfTwo(input.Length)
-                ? FFTInternal(input, inverse: true)
-                : Dft(input, inverse: true);
-
-            T scale = _numOps.FromDouble(input.Length);
-            for (int i = 0; i < output.Length; i++)
-            {
-                output[i] = new Complex<T>(
-                    _numOps.Divide(output[i].Real, scale),
-                    _numOps.Divide(output[i].Imaginary, scale));
-            }
-
-            return output;
-        }
-
-        private Vector<Complex<T>> FFTInternal(Vector<Complex<T>> input, bool inverse)
-        {
-            int n = input.Length;
-            if (n <= 1)
-            {
-                return input;
-            }
-
-            var even = new Vector<Complex<T>>(n / 2);
-            var odd = new Vector<Complex<T>>(n / 2);
-
-            for (int i = 0; i < n / 2; i++)
-            {
-                even[i] = input[2 * i];
-                odd[i] = input[2 * i + 1];
-            }
-
-            even = FFTInternal(even, inverse);
-            odd = FFTInternal(odd, inverse);
-
-            var output = new Vector<Complex<T>>(n);
-            T angleSign = inverse ? _numOps.One : _numOps.Negate(_numOps.One);
-
-            for (int k = 0; k < n / 2; k++)
-            {
-                T angle = _numOps.Multiply(angleSign,
-                    _numOps.Multiply(_numOps.FromDouble(2 * Math.PI * k), _numOps.FromDouble(1.0 / n)));
-                var twiddle = Complex<T>.FromPolarCoordinates(_numOps.One, angle);
-                var t = _complexOps.Multiply(twiddle, odd[k]);
-                output[k] = _complexOps.Add(even[k], t);
-                output[k + n / 2] = _complexOps.Subtract(even[k], t);
-            }
-
-            return output;
-        }
-
-        private Vector<Complex<T>> Dft(Vector<Complex<T>> input, bool inverse)
-        {
-            int n = input.Length;
-            var output = new Vector<Complex<T>>(n);
-            T sign = inverse ? _numOps.One : _numOps.Negate(_numOps.One);
-
-            for (int k = 0; k < n; k++)
-            {
-                Complex<T> sum = _complexOps.Zero;
-                for (int t = 0; t < n; t++)
-                {
-                    double angleValue = 2.0 * Math.PI * k * t / n;
-                    T angle = _numOps.Multiply(sign, _numOps.FromDouble(angleValue));
-                    var twiddle = Complex<T>.FromPolarCoordinates(_numOps.One, angle);
-                    sum = _complexOps.Add(sum, _complexOps.Multiply(input[t], twiddle));
-                }
-                output[k] = sum;
-            }
-
-            return output;
-        }
-
-        private int[][] BuildModeIndices(int[] spatialShape)
-        {
-            var modeIndices = new int[spatialShape.Length][];
-            for (int d = 0; d < spatialShape.Length; d++)
-            {
-                int modeSize = Math.Min(_modeSizes[d], spatialShape[d]);
-                modeIndices[d] = BuildModeIndicesForDim(spatialShape[d], modeSize);
-            }
-
-            return modeIndices;
-        }
-
-        private static int[] BuildModeIndicesForDim(int dimSize, int modeSize)
-        {
-            var indices = new HashSet<int>();
-            for (int i = 0; i < modeSize; i++)
-            {
-                indices.Add(i);
-            }
-
-            int start = dimSize - modeSize;
-            if (start > 0)
-            {
-                for (int i = start; i < dimSize; i++)
-                {
-                    indices.Add(i);
-                }
-            }
-
-            return indices.ToArray();
-        }
-
-        private static int MapModeIndex(int freqIndex, int dimSize, int modeSize)
-        {
-            if (freqIndex < modeSize)
-            {
-                return freqIndex;
-            }
-
-            int start = dimSize - modeSize;
-            if (freqIndex >= start)
-            {
-                return freqIndex - start;
-            }
-
-            return -1;
-        }
-
-        private static void IterateModeIndices(int[][] modeIndices, int depth, int[] current, Action callback)
-        {
-            if (depth == modeIndices.Length)
-            {
-                callback();
-                return;
-            }
-
-            foreach (int index in modeIndices[depth])
-            {
-                current[depth] = index;
-                IterateModeIndices(modeIndices, depth + 1, current, callback);
-            }
-        }
-
-        private static int[] ComputeStrides(int[] shape)
-        {
-            int[] strides = new int[shape.Length];
-            int stride = 1;
-
-            for (int i = shape.Length - 1; i >= 0; i--)
-            {
-                strides[i] = stride;
-                stride *= shape[i];
-            }
-
-            return strides;
-        }
-
-        private static void FillSpatialIndices(int linearIndex, int[] shape, int[] strides, int[] indices, int offset)
-        {
-            int remaining = linearIndex;
-            for (int i = 0; i < shape.Length; i++)
-            {
-                int coord = remaining / strides[i];
-                remaining %= strides[i];
-                indices[offset + i] = coord;
-            }
-        }
-
-        private static bool IsPowerOfTwo(int value)
-        {
-            return value > 0 && (value & (value - 1)) == 0;
+            // [B, d_1, ..., d_N, C_out] → [B, C_out, d_1, ..., d_N]
+            // perm axes: [0, rank-1, 1, 2, ..., rank-2]
+            int[] fromFlatPerm = new int[rank];
+            fromFlatPerm[0] = 0;
+            fromFlatPerm[1] = rank - 1;
+            for (int d = 0; d < rank - 2; d++) fromFlatPerm[2 + d] = 1 + d;
+            return Engine.TensorPermute(unflat, fromFlatPerm);
         }
     }
 }

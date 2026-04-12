@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -17,9 +19,11 @@ public abstract class SegmentationTestBase : NeuralNetworkModelTestBase
     // the input (every pixel gets a classification).
     // =====================================================
 
-    [Fact]
-    public void OutputSpatialDims_MatchInput()
+    [Fact(Timeout = 120000)]
+    public async Task OutputSpatialDims_MatchInput()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -47,9 +51,11 @@ public abstract class SegmentationTestBase : NeuralNetworkModelTestBase
     // Negative mask values indicate a broken classification head.
     // =====================================================
 
-    [Fact]
-    public void MaskValues_AreNonNegative()
+    [Fact(Timeout = 120000)]
+    public async Task MaskValues_AreNonNegative()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -71,9 +77,11 @@ public abstract class SegmentationTestBase : NeuralNetworkModelTestBase
     // from uniform input indicate hallucinated boundaries.
     // =====================================================
 
-    [Fact]
-    public void UniformInput_UniformMask()
+    [Fact(Timeout = 120000)]
+    public async Task UniformInput_UniformMask()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var uniformInput = CreateConstantTensor(InputShape, 0.5);
 
@@ -96,9 +104,11 @@ public abstract class SegmentationTestBase : NeuralNetworkModelTestBase
     // Total mask area/probability mass must be finite.
     // =====================================================
 
-    [Fact]
-    public void OutputSum_IsFinite()
+    [Fact(Timeout = 120000)]
+    public async Task OutputSum_IsFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

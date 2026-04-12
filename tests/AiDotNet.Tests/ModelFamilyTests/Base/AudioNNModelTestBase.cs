@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -17,9 +19,11 @@ public abstract class AudioNNModelTestBase : NeuralNetworkModelTestBase
     // produce deafening noise or crash downstream processing.
     // =====================================================
 
-    [Fact]
-    public void FiniteSpectralEnergy()
+    [Fact(Timeout = 120000)]
+    public async Task FiniteSpectralEnergy()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -41,9 +45,11 @@ public abstract class AudioNNModelTestBase : NeuralNetworkModelTestBase
     // A model that produces loud output from silence is broken.
     // =====================================================
 
-    [Fact]
-    public void SilenceIn_NearSilenceOut()
+    [Fact(Timeout = 120000)]
+    public async Task SilenceIn_NearSilenceOut()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var silence = CreateConstantTensor(InputShape, 0.0);
 
@@ -65,9 +71,11 @@ public abstract class AudioNNModelTestBase : NeuralNetworkModelTestBase
     // Audio models must handle varying input sizes gracefully.
     // =====================================================
 
-    [Fact]
-    public void DifferentInputLengths_ShouldNotCrash()
+    [Fact(Timeout = 120000)]
+    public async Task DifferentInputLengths_ShouldNotCrash()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
 
@@ -90,9 +98,11 @@ public abstract class AudioNNModelTestBase : NeuralNetworkModelTestBase
     // Audio output must contain at least one sample.
     // =====================================================
 
-    [Fact]
-    public void OutputLength_ShouldBePositive()
+    [Fact(Timeout = 120000)]
+    public async Task OutputLength_ShouldBePositive()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

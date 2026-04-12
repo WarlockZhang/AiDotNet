@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -10,9 +12,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class OpticalFlowTestBase : VideoNNModelTestBase
 {
-    [Fact]
-    public void IdenticalFrames_NearZeroFlow()
+    [Fact(Timeout = 120000)]
+    public async Task IdenticalFrames_NearZeroFlow()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var frame = CreateConstantTensor(InputShape, 0.5);
         var output = network.Predict(frame);
@@ -27,9 +31,11 @@ public abstract class OpticalFlowTestBase : VideoNNModelTestBase
             $"Optical flow RMS = {rms:F4} for constant input — expected near-zero flow for no motion.");
     }
 
-    [Fact]
-    public void FlowVectors_ShouldBeBounded()
+    [Fact(Timeout = 120000)]
+    public async Task FlowVectors_ShouldBeBounded()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

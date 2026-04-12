@@ -536,10 +536,10 @@ public partial class MixtureOfExpertsLayer<T> : LayerBase<T>, IAuxiliaryLossLaye
 
         if (rank == 1)
         {
-            // 1D: [features] -> add batch dim
+            // 1D: [features] -> add batch dim (tape-tracked reshape)
             batchSize = 1;
             int featureSize = input.Shape[0];
-            input2D = input.Reshape(new[] { 1, featureSize });
+            input2D = Engine.Reshape(input, new[] { 1, featureSize });
         }
         else if (rank == 2)
         {
@@ -549,13 +549,13 @@ public partial class MixtureOfExpertsLayer<T> : LayerBase<T>, IAuxiliaryLossLaye
         }
         else
         {
-            // Higher-rank: collapse all leading dims into batch
+            // Higher-rank: collapse all leading dims into batch (tape-tracked reshape)
             int flatBatch = 1;
             for (int d = 0; d < rank - 1; d++)
                 flatBatch *= input.Shape[d];
             batchSize = flatBatch;
             int featureSize = input.Shape[rank - 1];
-            input2D = input.Reshape(new[] { flatBatch, featureSize });
+            input2D = Engine.Reshape(input, new[] { flatBatch, featureSize });
         }
 
         // Cache input for backward pass
@@ -563,6 +563,30 @@ public partial class MixtureOfExpertsLayer<T> : LayerBase<T>, IAuxiliaryLossLaye
 
         // Step 1: Compute routing scores
         var routingLogits = _router.Forward(input2D);
+
+        // Per Shazeer et al. 2017 §3.2: Add noisy gating during training only.
+        // H(x) = x·Wg + StandardNormal()·Softplus(x·Wnoise)
+        // During inference, use clean logits for deterministic routing.
+        if (IsTrainingMode)
+        {
+            // Softplus(x) = log(1 + exp(x)) — noise scale
+            var expLogits = Engine.TensorExp(routingLogits);
+            var onePlusExp = Engine.TensorAddScalar(expLogits, NumOps.One);
+            var noiseScale = Engine.TensorLog(onePlusExp);
+
+            // Standard normal noise via Box-Muller
+            var noiseData = new T[routingLogits.Length];
+            var rng = RandomHelper.CreateSeededRandom(42);
+            for (int i = 0; i < noiseData.Length; i++)
+            {
+                double u1 = 1.0 - rng.NextDouble();
+                double u2 = rng.NextDouble();
+                noiseData[i] = NumOps.FromDouble(Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2));
+            }
+            var noise = new Tensor<T>(routingLogits._shape, new Vector<T>(noiseData));
+            routingLogits = Engine.TensorAdd(routingLogits, Engine.TensorMultiply(noise, noiseScale));
+        }
+
         _lastRoutingLogits = routingLogits;
 
         // Step 2: Apply softmax to get routing probabilities
@@ -638,12 +662,12 @@ public partial class MixtureOfExpertsLayer<T> : LayerBase<T>, IAuxiliaryLossLaye
             for (int d = 0; d < _originalInputShape.Length - 1; d++)
                 newShape[d] = _originalInputShape[d];
             newShape[_originalInputShape.Length - 1] = outputFeatures;
-            output = output.Reshape(newShape);
+            output = Engine.Reshape(output, newShape);
         }
         else if (_originalInputShape != null && _originalInputShape.Length == 1)
         {
             // 1D input -> 1D output (remove batch dim)
-            output = output.Reshape(new[] { output.Shape[1] });
+            output = Engine.Reshape(output, new[] { output.Shape[1] });
         }
 
         return output;
@@ -1327,24 +1351,33 @@ public partial class MixtureOfExpertsLayer<T> : LayerBase<T>, IAuxiliaryLossLaye
         int batchSize = weights.Shape[0];
         int numExperts = weights.Shape[1];
 
-        // VECTORIZED: Use TensorTopK to get top-k values and indices
-        var topKValues = Engine.TensorTopK(weights, k, axis: 1, out Tensor<int> topKIndicesTensor);
-        // topKValues shape: [batchSize, k]
-        // topKIndicesTensor shape: [batchSize, k]
+        // Step 1: Use TensorTopK ONLY for index selection (non-differentiable, indices only)
+        _ = Engine.TensorTopK(weights, k, axis: 1, out Tensor<int> topKIndicesTensor);
 
-        // VECTORIZED: Compute row sums for normalization
-        var sumPerRow = Engine.ReduceSum(topKValues, new[] { 1 }, keepDims: true); // [batchSize, 1]
+        // Step 2: Build binary mask from top-K indices (detached from tape — treated as constant).
+        // Hard top-K masking: forward multiplies softmax weights by 0/1 mask and renormalizes.
+        // Gradients flow through the mask×weight product to the softmax weights for selected experts;
+        // non-selected experts receive zero gradient. This is not a straight-through estimator
+        // (which would use hard - soft.detach() + soft), but standard sparse gating per Shazeer et al.
+        // NOTE: The O(batchSize×k) scalar loop is intentional — TensorScatter is non-differentiable
+        // in the Tensors OpRegistry, so we must use this approach for gradient flow.
+        var mask = new Tensor<T>(weights._shape);
+        mask.Fill(NumOps.Zero);
+        for (int b = 0; b < batchSize; b++)
+        {
+            for (int i = 0; i < k; i++)
+            {
+                mask[b, topKIndicesTensor[b, i]] = NumOps.One;
+            }
+        }
 
-        // VECTORIZED: Normalize top-k values (with broadcasting for shape [batchSize, k] / [batchSize, 1])
-        var normalizedTopK = Engine.TensorBroadcastDivide(topKValues, sumPerRow); // [batchSize, k]
+        // Step 3: Multiply original weights by mask using tape-tracked Engine operation
+        var maskedWeights = Engine.TensorBroadcastMultiply(weights, mask); // [batchSize, numExperts]
 
-        // VECTORIZED: Scatter normalized values back to full expert dimension
-        // Create zero tensor for sparse weights
-        var sparseWeights = new Tensor<T>(weights._shape);
-        sparseWeights.Fill(NumOps.Zero);
-
-        // Use TensorScatter to place normalized values at correct positions
-        sparseWeights = Engine.TensorScatter(sparseWeights, topKIndicesTensor, normalizedTopK, axis: 1);
+        // Step 4: Renormalize using tape-tracked operations (epsilon scalar for numerical stability)
+        var sumPerRow = Engine.ReduceSum(maskedWeights, new[] { 1 }, keepDims: true); // [batchSize, 1]
+        var safeSumPerRow = Engine.TensorAddScalar(sumPerRow, NumOps.FromDouble(1e-10));
+        var sparseWeights = Engine.TensorBroadcastDivide(maskedWeights, safeSumPerRow); // [batchSize, numExperts]
 
         // Convert topKIndicesTensor to int[,] for backward compatibility
         var topKIndices = new int[batchSize, k];
@@ -1396,41 +1429,43 @@ public partial class MixtureOfExpertsLayer<T> : LayerBase<T>, IAuxiliaryLossLaye
             throw new ArgumentException("Must have at least one expert output.", nameof(expertOutputs));
         }
 
-        // Initialize combined output with zeros
-        var combined = new Tensor<T>(expertOutputs[0].Shape.ToArray());
-        combined.Fill(NumOps.Zero);
-
-        // Vectorized: For each expert, multiply its output by routing weights and accumulate
+        // All operations must use Engine for tape-tracked gradient flow.
         // expertOutputs[i] shape: [batchSize, outputDim]
         // routingWeights shape: [batchSize, numExperts]
-        // We need weight for expert i: routingWeights[:, i] with shape [batchSize, 1] for broadcasting
+
+        int batchSize = routingWeights.Shape[0];
+
+        Tensor<T>? combined = null;
 
         for (int i = 0; i < expertOutputs.Count; i++)
         {
             var expertOutput = expertOutputs[i];
 
-            // Extract routing weight for expert i as a vector [batchSize]
-            // GetSliceAlongDimension(index, dimension) - get slice at index i along dimension 1 (expert dim)
-            var weightVector = routingWeights.GetSliceAlongDimension(i, 1);
+            // Tape-tracked axis=1 gather: extract the i-th column of routingWeights.
+            // routingWeights[batch, numExperts] gather idx=[i] on axis=1 -> [batch, 1].
+            var indexTensor = new Tensor<int>(new[] { i }, new[] { 1 });
+            var weightColumn2D = Engine.TensorGather(routingWeights, indexTensor, axis: 1);
 
-            // Reshape for broadcasting across any-rank expert outputs
-            var broadcastShape = new int[expertOutput.Shape.Length];
-            broadcastShape[0] = weightVector.Shape[0];
-            for (int d = 1; d < broadcastShape.Length; d++)
+            // Reshape for broadcasting: [batch, 1] -> [batch, 1, ...] for higher-rank expert outputs
+            if (expertOutput.Shape.Length > 2)
             {
-                broadcastShape[d] = 1;
+                var broadcastShape = new int[expertOutput.Shape.Length];
+                broadcastShape[0] = batchSize;
+                for (int d = 1; d < broadcastShape.Length; d++)
+                    broadcastShape[d] = 1;
+                weightColumn2D = Engine.Reshape(weightColumn2D, broadcastShape);
             }
 
-            var weightColumn = weightVector.Reshape(broadcastShape);
+            // Tape-tracked multiply + accumulate
+            var weightedOutput = Engine.TensorBroadcastMultiply(expertOutput, weightColumn2D);
 
-            // Multiply expert output by weight (broadcasts across output dimensions)
-            var weightedOutput = Engine.TensorBroadcastMultiply(expertOutput, weightColumn);
-
-            // Accumulate
-            combined = Engine.TensorBroadcastAdd(combined, weightedOutput);
+            if (combined == null)
+                combined = weightedOutput;
+            else
+                combined = Engine.TensorBroadcastAdd(combined, weightedOutput);
         }
 
-        return combined;
+        return combined!;
     }
 
     /// <summary>
@@ -1599,7 +1634,7 @@ public partial class MixtureOfExpertsLayer<T> : LayerBase<T>, IAuxiliaryLossLaye
         {
             if (outputGradient.Length == _lastPreActivation.Length)
             {
-                return outputGradient.Reshape(_lastPreActivation.Shape.ToArray());
+                return outputGradient.Reshape(_lastPreActivation._shape);
             }
 
             throw new ArgumentException("Output gradient shape does not match layer output.");

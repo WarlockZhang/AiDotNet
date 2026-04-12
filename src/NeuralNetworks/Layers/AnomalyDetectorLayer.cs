@@ -252,12 +252,12 @@ public class AnomalyDetectorLayer<T> : LayerBase<T>
 
         int halfSize = featureSize / 2;
         int[] startActual = new int[rank];
-        int[] lengthActual = (int[])input.Shape.ToArray().Clone();
+        int[] lengthActual = (int[])input._shape.Clone();
         lengthActual[rank - 1] = halfSize;
 
         int[] startPred = new int[rank];
         startPred[rank - 1] = halfSize;
-        int[] lengthPred = (int[])input.Shape.ToArray().Clone();
+        int[] lengthPred = (int[])input._shape.Clone();
         lengthPred[rank - 1] = halfSize;
 
         var actual = Engine.TensorSlice(input, startActual, lengthActual);

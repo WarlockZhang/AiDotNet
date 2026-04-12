@@ -325,16 +325,16 @@ public partial class HedgehogLayer<T> : LayerBase<T>
         if (rank < 3) batchSize = 1;
 
         var input3D = rank == 2
-            ? input.Reshape(1, seqLen, modelDim)
-            : input.Reshape(batchSize, seqLen, modelDim);
+            ? Engine.Reshape(input, new[] { 1, seqLen, modelDim })
+            : Engine.Reshape(input, new[] { batchSize, seqLen, modelDim });
 
         _lastInput = input3D;
 
         // Step 1: Q, K, V projections
-        var inputFlat = input3D.Reshape(batchSize * seqLen, _modelDimension);
-        var q = Engine.TensorMatMul(inputFlat, _queryWeights).Reshape(batchSize, seqLen, _modelDimension);
-        var k = Engine.TensorMatMul(inputFlat, _keyWeights).Reshape(batchSize, seqLen, _modelDimension);
-        var v = Engine.TensorMatMul(inputFlat, _valueWeights).Reshape(batchSize, seqLen, _modelDimension);
+        var inputFlat = Engine.Reshape(input3D, new[] { batchSize * seqLen, _modelDimension });
+        var q = Engine.Reshape(Engine.TensorMatMul(inputFlat, _queryWeights), new[] { batchSize, seqLen, _modelDimension });
+        var k = Engine.Reshape(Engine.TensorMatMul(inputFlat, _keyWeights), new[] { batchSize, seqLen, _modelDimension });
+        var v = Engine.Reshape(Engine.TensorMatMul(inputFlat, _valueWeights), new[] { batchSize, seqLen, _modelDimension });
         _lastQuery = q;
         _lastKey = k;
         _lastValue = v;
@@ -399,9 +399,9 @@ public partial class HedgehogLayer<T> : LayerBase<T>
         _lastPhiKPreActivation = phiKPreAct;
 
         // Step 3: Compute output gate
-        var gateRaw = Engine.TensorBroadcastAdd(
+        var gateRaw = Engine.Reshape(Engine.TensorBroadcastAdd(
             Engine.TensorMatMul(inputFlat, _outputGateWeights),
-            _outputGateBias.Reshape(1, _modelDimension)).Reshape(batchSize, seqLen, _modelDimension);
+            Engine.Reshape(_outputGateBias, new[] { 1, _modelDimension })), new[] { batchSize, seqLen, _modelDimension });
         var gate = Engine.Swish(gateRaw);
         _lastGateRaw = gateRaw;
         _lastGate = gate;
@@ -414,24 +414,24 @@ public partial class HedgehogLayer<T> : LayerBase<T>
         var gatedOutput = Engine.TensorMultiply(gate, attnOutput);
 
         // Step 6: Output projection
-        var gatedFlat = gatedOutput.Reshape(batchSize * seqLen, _modelDimension);
+        var gatedFlat = Engine.Reshape(gatedOutput, new[] { batchSize * seqLen, _modelDimension });
         var outputFlat = Engine.TensorBroadcastAdd(
             Engine.TensorMatMul(gatedFlat, _outputProjectionWeights),
-            _outputProjectionBias.Reshape(1, _modelDimension));
-        var output3D = outputFlat.Reshape(batchSize, seqLen, _modelDimension);
+            Engine.Reshape(_outputProjectionBias, new[] { 1, _modelDimension }));
+        var output3D = Engine.Reshape(outputFlat, new[] { batchSize, seqLen, _modelDimension });
 
         var result = ApplyActivation(output3D);
         _lastOutput = result;
 
         if (rank == 2)
-            return result.Reshape(seqLen, _modelDimension);
+            return Engine.Reshape(result, new[] { seqLen, _modelDimension });
 
         var outputShape = new int[rank];
         for (int i = 0; i < rank - 2; i++)
             outputShape[i] = input.Shape[i];
         outputShape[rank - 2] = seqLen;
         outputShape[rank - 1] = _modelDimension;
-        return result.Reshape(outputShape);
+        return Engine.Reshape(result, outputShape);
     }
 
     /// <summary>
@@ -503,86 +503,6 @@ public partial class HedgehogLayer<T> : LayerBase<T>
 
         _lastAttnDenominators = denominators;
         return output;
-    }
-
-    /// <summary>
-    /// Backward through the feature map MLP: phi(x) = W2 * GELU(W1 * x + b1) + b2.
-    /// Accumulates gradients for W1, b1, W2, b2 and propagates to input.
-    /// </summary>
-    private void FeatureMapBackward(
-        Tensor<T> dPhi, Tensor<T> inputQK, Tensor<T> hidden, Tensor<T> preActivation,
-        Tensor<T> dInput, int bi, int t, int hi, int dimStart)
-    {
-        // Validate all gradient tensors upfront
-        var w2Grad = _featureMapW2Gradient ?? throw new InvalidOperationException("_featureMapW2Gradient has not been initialized.");
-        var b2Grad = _featureMapB2Gradient ?? throw new InvalidOperationException("_featureMapB2Gradient has not been initialized.");
-        var w1Grad = _featureMapW1Gradient ?? throw new InvalidOperationException("_featureMapW1Gradient has not been initialized.");
-        var b1Grad = _featureMapB1Gradient ?? throw new InvalidOperationException("_featureMapB1Gradient has not been initialized.");
-
-        // dPhi -> W2 backward: dHidden = W2^T * dPhi, dW2 += dPhi * hidden^T
-        var dHidden = new T[_featureMapHiddenDim];
-
-        for (int fi = 0; fi < _featureMapHiddenDim; fi++)
-        {
-            T dH = NumOps.Zero;
-            for (int di = 0; di < _headDimension; di++)
-            {
-                T dPhiVal = dPhi[new[] { bi, t, dimStart + di }];
-                T hVal = hidden[new[] { bi, t, hi, fi }];
-
-                // dW2[hi, fi, di] += dPhiVal * hVal
-                w2Grad[new[] { hi, fi, di }] = NumOps.Add(
-                    w2Grad[new[] { hi, fi, di }],
-                    NumOps.Multiply(dPhiVal, hVal));
-
-                // dB2[hi, di] += dPhiVal
-                b2Grad[new[] { hi, di }] = NumOps.Add(
-                    b2Grad[new[] { hi, di }], dPhiVal);
-
-                dH = NumOps.Add(dH,
-                    NumOps.Multiply(dPhiVal, _featureMapW2[new[] { hi, fi, di }]));
-            }
-            dHidden[fi] = dH;
-        }
-
-        // GELU backward: d(GELU)/dx = sigmoid(1.702*x) + x * 1.702 * sigmoid(1.702*x) * (1 - sigmoid(1.702*x))
-        var dPreAct = new T[_featureMapHiddenDim];
-        for (int fi = 0; fi < _featureMapHiddenDim; fi++)
-        {
-            T x = preActivation[new[] { bi, t, hi, fi }];
-            T scaled = NumOps.Multiply(NumOps.FromDouble(1.702), x);
-            T expNeg = NumOps.Exp(NumOps.Negate(scaled));
-            T sig = NumOps.Divide(NumOps.One, NumOps.Add(NumOps.One, expNeg));
-            T sigDeriv = NumOps.Multiply(sig, NumOps.Subtract(NumOps.One, sig));
-            T geluDeriv = NumOps.Add(sig,
-                NumOps.Multiply(x, NumOps.Multiply(NumOps.FromDouble(1.702), sigDeriv)));
-            dPreAct[fi] = NumOps.Multiply(dHidden[fi], geluDeriv);
-
-            // dB1[hi, fi] += dPreAct
-            b1Grad[new[] { hi, fi }] = NumOps.Add(
-                b1Grad[new[] { hi, fi }], dPreAct[fi]);
-        }
-
-        // W1 backward: dInput += W1^T * dPreAct, dW1 += dPreAct * input^T
-        for (int di = 0; di < _headDimension; di++)
-        {
-            T dIn = NumOps.Zero;
-            T inputVal = inputQK[new[] { bi, t, dimStart + di }];
-
-            for (int fi = 0; fi < _featureMapHiddenDim; fi++)
-            {
-                // dW1[hi, di, fi] += dPreAct[fi] * input[di]
-                w1Grad[new[] { hi, di, fi }] = NumOps.Add(
-                    w1Grad[new[] { hi, di, fi }],
-                    NumOps.Multiply(dPreAct[fi], inputVal));
-
-                dIn = NumOps.Add(dIn,
-                    NumOps.Multiply(dPreAct[fi], _featureMapW1[new[] { hi, di, fi }]));
-            }
-
-            dInput[new[] { bi, t, dimStart + di }] = NumOps.Add(
-                dInput[new[] { bi, t, dimStart + di }], dIn);
-        }
     }
 
     private Tensor<T> ComputeSiLUDerivative(Tensor<T> x)

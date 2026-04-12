@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -11,9 +13,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class FinancialNLPTestBase : FinancialModelTestBase
 {
-    [Fact]
-    public void DifferentText_DifferentSentiment()
+    [Fact(Timeout = 60000)]
+    public async Task DifferentText_DifferentSentiment()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var positive = CreateConstantTensor(InputShape, 0.9);
         var negative = CreateConstantTensor(InputShape, 0.1);
@@ -35,9 +39,11 @@ public abstract class FinancialNLPTestBase : FinancialModelTestBase
             "Financial NLP produces identical output for different text — ignoring input.");
     }
 
-    [Fact]
-    public void SentimentScores_ShouldBeBounded()
+    [Fact(Timeout = 60000)]
+    public async Task SentimentScores_ShouldBeBounded()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

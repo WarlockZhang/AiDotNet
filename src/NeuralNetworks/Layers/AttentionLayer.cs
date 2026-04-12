@@ -465,7 +465,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
                     nameof(input));
             }
             int batchSize2D = input.Shape[0];
-            input3D = input.Reshape(batchSize2D, 1, _inputSize);
+            input3D = Engine.Reshape(input, [batchSize2D, 1, _inputSize]);
         }
         else if (rank == 3)
         {
@@ -474,7 +474,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
             {
                 throw new ArgumentException(
                     $"AttentionLayer input size mismatch. Expected InputSize={_inputSize}, " +
-                    $"but got {input.Shape[2]} in shape [{string.Join(", ", input.Shape.ToArray())}].",
+                    $"but got {input.Shape[2]} in shape [{string.Join(", ", input._shape)}].",
                     nameof(input));
             }
             input3D = input;
@@ -486,13 +486,13 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
             {
                 throw new ArgumentException(
                     $"AttentionLayer input size mismatch. Expected InputSize={_inputSize}, " +
-                    $"but got {input.Shape[rank - 1]} in shape [{string.Join(", ", input.Shape.ToArray())}].",
+                    $"but got {input.Shape[rank - 1]} in shape [{string.Join(", ", input._shape)}].",
                     nameof(input));
             }
             int flatBatch = 1;
             for (int d = 0; d < rank - 2; d++)
                 flatBatch *= input.Shape[d];
-            input3D = input.Reshape(flatBatch, input.Shape[rank - 2], input.Shape[rank - 1]);
+            input3D = Engine.Reshape(input, [flatBatch, input.Shape[rank - 2], input.Shape[rank - 1]]);
         }
 
         _lastInput = input;
@@ -507,7 +507,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
 
         // 1. Project Input to Q, K, V
         // Reshape input to 2D [Batch*Seq, InputSize] for efficient MatrixMultiply
-        var inputFlat = input3D.Reshape(batchSize * seqLen, _inputSize);
+        var inputFlat = Engine.Reshape(input3D, [batchSize * seqLen, _inputSize]);
 
         // Transpose weights to [InputSize, AttSize] using Engine 2D transpose
         var wqTransposed = Engine.TensorTranspose(_Wq);
@@ -520,9 +520,9 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         var vProjected = Engine.TensorMatMul(inputFlat, wvTransposed);
 
         // Reshape back to [Batch, Seq, AttSize]
-        var Q = qProjected.Reshape(batchSize, seqLen, _attentionSize);
-        var K = kProjected.Reshape(batchSize, seqLen, _attentionSize);
-        var V = vProjected.Reshape(batchSize, seqLen, _attentionSize);
+        var Q = Engine.Reshape(qProjected, [batchSize, seqLen, _attentionSize]);
+        var K = Engine.Reshape(kProjected, [batchSize, seqLen, _attentionSize]);
+        var V = Engine.Reshape(vProjected, [batchSize, seqLen, _attentionSize]);
 
         Tensor<T> attentionOutput;
 
@@ -532,9 +532,9 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         {
             // 2-5. Use Engine.ScaledDotProductAttention for optimized computation
             // Reshape to 4D by adding head dimension: [B, S, A] -> [B, 1, S, A]
-            var Q4D = Q.Reshape(batchSize, 1, seqLen, _attentionSize);
-            var K4D = K.Reshape(batchSize, 1, seqLen, _attentionSize);
-            var V4D = V.Reshape(batchSize, 1, seqLen, _attentionSize);
+            var Q4D = Engine.Reshape(Q, [batchSize, 1, seqLen, _attentionSize]);
+            var K4D = Engine.Reshape(K, [batchSize, 1, seqLen, _attentionSize]);
+            var V4D = Engine.Reshape(V, [batchSize, 1, seqLen, _attentionSize]);
 
             var output4D = Engine.ScaledDotProductAttention(
                 Q4D, K4D, V4D,
@@ -543,16 +543,16 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
                 out var attentionWeights4D);
 
             // Reshape attention weights back to 3D for caching: [B, 1, S, S] -> [B, S, S]
-            _lastAttentionWeights = attentionWeights4D.Reshape(batchSize, seqLen, seqLen);
+            _lastAttentionWeights = Engine.Reshape(attentionWeights4D, [batchSize, seqLen, seqLen]);
 
             // Reshape output back to 3D: [B, 1, S, A] -> [B, S, A]
-            attentionOutput = output4D.Reshape(batchSize, seqLen, _attentionSize);
+            attentionOutput = Engine.Reshape(output4D, [batchSize, seqLen, _attentionSize]);
         }
         else
         {
             // Fallback to manual computation for custom activations
             // 2. Compute Attention Scores: Q @ K.T (per-batch, Engine.BatchMatMul has issues)
-            var KT = K.Transpose(new[] { 0, 2, 1 });
+            var KT = Engine.TensorPermute(K, new[] { 0, 2, 1 });
             var attentionScores = TensorAllocator.Rent<T>([batchSize, seqLen, seqLen]);
             for (int b = 0; b < batchSize; b++)
             {
@@ -585,15 +585,15 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
 
         // 6. Output Projection: Apply Wo to project from attentionSize back to inputSize
         // Flatten for matmul: [B*S, A] @ [A, inputSize] -> [B*S, inputSize]
-        var attnFlat = attentionOutput.Reshape(batchSize * seqLen, _attentionSize);
+        var attnFlat = Engine.Reshape(attentionOutput, [batchSize * seqLen, _attentionSize]);
         var woTransposed = Engine.TensorTranspose(_Wo);
         var projectedFlat = Engine.TensorMatMul(attnFlat, woTransposed);
-        var output = projectedFlat.Reshape(batchSize, seqLen, _inputSize);
+        var output = Engine.Reshape(projectedFlat, [batchSize, seqLen, _inputSize]);
 
         // Restore original tensor shape
         if (_inputWas2D)
         {
-            output = output.Reshape(batchSize, _inputSize);
+            output = Engine.Reshape(output, [batchSize, _inputSize]);
         }
         else if (_originalInputShape != null && _originalInputShape.Length > 3)
         {
@@ -603,7 +603,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
                 outputShape[d] = _originalInputShape[d];
             outputShape[_originalInputShape.Length - 2] = seqLen;
             outputShape[_originalInputShape.Length - 1] = _inputSize;
-            output = output.Reshape(outputShape);
+            output = Engine.Reshape(output, outputShape);
         }
 
         return output;
@@ -844,7 +844,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
             else
             {
                 throw new ArgumentException(
-                    $"Second input tensor has ambiguous shape {string.Join("x", secondInput.Shape.ToArray())}. " +
+                    $"Second input tensor has ambiguous shape {string.Join("x", secondInput._shape)}. " +
                     $"Expected either a mask [batch, queryLen, keyLen] or cross-attention K/V [batch, seqLen, {_inputSize}].");
             }
         }
@@ -881,7 +881,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         // Handle 2D [Batch, InputSize] or 3D [Batch, Seq, InputSize] input
         _inputWas2D = input.Shape.Length == 2;
         Tensor<T> input3D = _inputWas2D
-            ? input.Reshape(input.Shape[0], 1, _inputSize)
+            ? Engine.Reshape(input, [input.Shape[0], 1, _inputSize])
             : input;
 
         _lastQueryInput = input3D;
@@ -892,7 +892,7 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         int seqLen = input3D.Shape[1];
 
         // 1. Project Input to Q, K, V
-        var inputFlat = input3D.Reshape(batchSize * seqLen, _inputSize);
+        var inputFlat = Engine.Reshape(input3D, [batchSize * seqLen, _inputSize]);
         var wqTransposed = Engine.TensorTranspose(_Wq);
         var wkTransposed = Engine.TensorTranspose(_Wk);
         var wvTransposed = Engine.TensorTranspose(_Wv);
@@ -901,12 +901,12 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         var kProjected = Engine.TensorMatMul(inputFlat, wkTransposed);
         var vProjected = Engine.TensorMatMul(inputFlat, wvTransposed);
 
-        var Q = qProjected.Reshape(batchSize, seqLen, _attentionSize);
-        var K = kProjected.Reshape(batchSize, seqLen, _attentionSize);
-        var V = vProjected.Reshape(batchSize, seqLen, _attentionSize);
+        var Q = Engine.Reshape(qProjected, [batchSize, seqLen, _attentionSize]);
+        var K = Engine.Reshape(kProjected, [batchSize, seqLen, _attentionSize]);
+        var V = Engine.Reshape(vProjected, [batchSize, seqLen, _attentionSize]);
 
         // 2. Compute Attention Scores: Q @ K.T
-        var KT = K.Transpose(new[] { 0, 2, 1 });
+        var KT = Engine.TensorPermute(K, new[] { 0, 2, 1 });
         var attentionScores = Engine.BatchMatMul(Q, KT);
 
         // 3. Scale
@@ -924,15 +924,15 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         _lastAttentionOutput = attentionOutput; // Cache for backward pass
 
         // 7. Output Projection: Apply Wo to project from attentionSize back to inputSize
-        var attnFlat = attentionOutput.Reshape(batchSize * seqLen, _attentionSize);
+        var attnFlat = Engine.Reshape(attentionOutput, [batchSize * seqLen, _attentionSize]);
         var woTransposed = Engine.TensorTranspose(_Wo);
         var projectedFlat = Engine.TensorMatMul(attnFlat, woTransposed);
-        var output = projectedFlat.Reshape(batchSize, seqLen, _inputSize);
+        var output = Engine.Reshape(projectedFlat, [batchSize, seqLen, _inputSize]);
 
         // If input was 2D, reshape output back to 2D
         if (_inputWas2D)
         {
-            output = output.Reshape(batchSize, _inputSize);
+            output = Engine.Reshape(output, [batchSize, _inputSize]);
         }
 
         return output;
@@ -960,11 +960,11 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         if (_inputWas2D)
         {
             int batchSize2D = queryInput.Shape[0];
-            query3D = queryInput.Reshape(batchSize2D, 1, _inputSize);
+            query3D = Engine.Reshape(queryInput, [batchSize2D, 1, _inputSize]);
             // KeyValue input should match query dimensionality
             if (keyValueInput.Shape.Length == 2)
             {
-                keyValue3D = keyValueInput.Reshape(keyValueInput.Shape[0], 1, _inputSize);
+                keyValue3D = Engine.Reshape(keyValueInput, [keyValueInput.Shape[0], 1, _inputSize]);
             }
             else
             {
@@ -986,22 +986,22 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         int seqLenKV = keyValue3D.Shape[1];
 
         // Project Q from query input
-        var queryFlat = query3D.Reshape(batchSize * seqLenQ, _inputSize);
+        var queryFlat = Engine.Reshape(query3D, [batchSize * seqLenQ, _inputSize]);
         var wqTransposed = Engine.TensorTranspose(_Wq);
         var qProjected = Engine.TensorMatMul(queryFlat, wqTransposed);
-        var Q = qProjected.Reshape(batchSize, seqLenQ, _attentionSize);
+        var Q = Engine.Reshape(qProjected, [batchSize, seqLenQ, _attentionSize]);
 
         // Project K, V from key/value input
-        var kvFlat = keyValue3D.Reshape(batchSize * seqLenKV, _inputSize);
+        var kvFlat = Engine.Reshape(keyValue3D, [batchSize * seqLenKV, _inputSize]);
         var wkTransposed = Engine.TensorTranspose(_Wk);
         var wvTransposed = Engine.TensorTranspose(_Wv);
         var kProjected = Engine.TensorMatMul(kvFlat, wkTransposed);
         var vProjected = Engine.TensorMatMul(kvFlat, wvTransposed);
-        var K = kProjected.Reshape(batchSize, seqLenKV, _attentionSize);
-        var V = vProjected.Reshape(batchSize, seqLenKV, _attentionSize);
+        var K = Engine.Reshape(kProjected, [batchSize, seqLenKV, _attentionSize]);
+        var V = Engine.Reshape(vProjected, [batchSize, seqLenKV, _attentionSize]);
 
         // Compute Scores: Q @ K.T
-        var KT = K.Transpose(new[] { 0, 2, 1 });
+        var KT = Engine.TensorPermute(K, new[] { 0, 2, 1 });
         var attentionScores = Engine.BatchMatMul(Q, KT);
 
         // Scale
@@ -1021,15 +1021,15 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
         _lastAttentionOutput = attentionOutput; // Cache for backward pass
 
         // Output Projection: Apply Wo to project from attentionSize back to inputSize
-        var attnFlat = attentionOutput.Reshape(batchSize * seqLenQ, _attentionSize);
+        var attnFlat = Engine.Reshape(attentionOutput, [batchSize * seqLenQ, _attentionSize]);
         var woTransposed = Engine.TensorTranspose(_Wo);
         var projectedFlat = Engine.TensorMatMul(attnFlat, woTransposed);
-        var output = projectedFlat.Reshape(batchSize, seqLenQ, _inputSize);
+        var output = Engine.Reshape(projectedFlat, [batchSize, seqLenQ, _inputSize]);
 
         // If input was 2D, reshape output back to 2D
         if (_inputWas2D)
         {
-            output = output.Reshape(batchSize, _inputSize);
+            output = Engine.Reshape(output, [batchSize, _inputSize]);
         }
 
         return output;
@@ -1102,17 +1102,17 @@ public partial class AttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
 
         // Update Wq - slice and copy
         var wqParams = parameters.Slice(startIndex, _Wq.Length);
-        _Wq = Tensor<T>.FromVector(wqParams).Reshape(_Wq.Shape.ToArray());
+        _Wq = Tensor<T>.FromVector(wqParams).Reshape(_Wq._shape);
         startIndex += _Wq.Length;
 
         // Update Wk - slice and copy
         var wkParams = parameters.Slice(startIndex, _Wk.Length);
-        _Wk = Tensor<T>.FromVector(wkParams).Reshape(_Wk.Shape.ToArray());
+        _Wk = Tensor<T>.FromVector(wkParams).Reshape(_Wk._shape);
         startIndex += _Wk.Length;
 
         // Update Wv - slice and copy
         var wvParams = parameters.Slice(startIndex, _Wv.Length);
-        _Wv = Tensor<T>.FromVector(wvParams).Reshape(_Wv.Shape.ToArray());
+        _Wv = Tensor<T>.FromVector(wvParams).Reshape(_Wv._shape);
 
         // Notify GPU that tensor data has changed
         Engine.InvalidatePersistentTensor(_Wq);

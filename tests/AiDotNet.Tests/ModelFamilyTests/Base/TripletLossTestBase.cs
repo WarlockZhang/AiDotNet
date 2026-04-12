@@ -1,6 +1,8 @@
 using AiDotNet.LossFunctions;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -34,9 +36,11 @@ public abstract class TripletLossTestBase
     // INVARIANT 1: Loss is finite for normal inputs
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_ShouldBeFinite()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var anchor = CreateMatrix(2, 3, 0.1);
         var positive = CreateMatrix(2, 3, 0.15);
@@ -52,9 +56,11 @@ public abstract class TripletLossTestBase
     // INVARIANT 2: Loss is non-negative
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_ShouldBeNonNegative()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_ShouldBeNonNegative()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var anchor = CreateMatrix(2, 3, 0.1);
         var positive = CreateMatrix(2, 3, 0.15);
@@ -68,9 +74,11 @@ public abstract class TripletLossTestBase
     // INVARIANT 3: Loss is zero when positive is much closer than negative
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_WellSeparated_ShouldBeZero()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_WellSeparated_ShouldBeZero()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var anchor = CreateConstantMatrix(1, 3, 0.5);
         var positive = CreateConstantMatrix(1, 3, 0.5);
@@ -85,9 +93,11 @@ public abstract class TripletLossTestBase
     // INVARIANT 4: Loss increases when positive moves further from anchor
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_CloserPositive_ShouldProduceSmallerLoss()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_CloserPositive_ShouldProduceSmallerLoss()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var anchor = CreateConstantMatrix(1, 3, 0.0);
         var negative = CreateConstantMatrix(1, 3, 2.0);
@@ -105,9 +115,11 @@ public abstract class TripletLossTestBase
     // INVARIANT 5: Gradients are finite
     // =========================================================================
 
-    [Fact]
-    public void CalculateDerivative_ShouldBeFinite()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateDerivative_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var anchor = CreateMatrix(2, 3, 0.1);
         var positive = CreateMatrix(2, 3, 0.15);
@@ -133,9 +145,11 @@ public abstract class TripletLossTestBase
     // INVARIANT 6: Dimension validation
     // =========================================================================
 
-    [Fact]
-    public void CalculateLoss_MismatchedDimensions_ShouldThrow()
+    [Fact(Timeout = 30000)]
+    public async Task CalculateLoss_MismatchedDimensions_ShouldThrow()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var loss = CreateLoss();
         var anchor = CreateMatrix(2, 3, 0.1);
         var positive = CreateMatrix(1, 3, 0.1); // wrong rows

@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -27,9 +29,11 @@ public abstract class ReinforcementLearningTestBase
         return state;
     }
 
-    [Fact]
-    public void ActionSelection_ShouldBeFinite()
+    [Fact(Timeout = 60000)]
+    public async Task ActionSelection_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var state = CreateRandomState(rng);
@@ -48,9 +52,11 @@ public abstract class ReinforcementLearningTestBase
         }
     }
 
-    [Fact]
-    public void Policy_ShouldBeDeterministic()
+    [Fact(Timeout = 60000)]
+    public async Task Policy_ShouldBeDeterministic()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var state = CreateRandomState(rng);
@@ -63,9 +69,11 @@ public abstract class ReinforcementLearningTestBase
             Assert.Equal(action1[i], action2[i]);
     }
 
-    [Fact]
-    public void DifferentStates_DifferentActions()
+    [Fact(Timeout = 60000)]
+    public async Task DifferentStates_DifferentActions()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var model = CreateModel();
 
         var state1 = new Vector<double>(StateDim);
@@ -93,9 +101,11 @@ public abstract class ReinforcementLearningTestBase
             "RL agent produces identical actions for different states — policy is degenerate.");
     }
 
-    [Fact]
-    public void Training_ShouldChangeParameters()
+    [Fact(Timeout = 60000)]
+    public async Task Training_ShouldChangeParameters()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
 
@@ -122,9 +132,11 @@ public abstract class ReinforcementLearningTestBase
         Assert.True(anyChanged, "RL agent parameters unchanged after training.");
     }
 
-    [Fact]
-    public void Clone_ShouldProduceSamePolicy()
+    [Fact(Timeout = 60000)]
+    public async Task Clone_ShouldProduceSamePolicy()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var state = CreateRandomState(rng);
@@ -136,9 +148,11 @@ public abstract class ReinforcementLearningTestBase
             Assert.Equal(action1[i], action2[i]);
     }
 
-    [Fact]
-    public void Metadata_ShouldExistAfterTraining()
+    [Fact(Timeout = 60000)]
+    public async Task Metadata_ShouldExistAfterTraining()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var state = CreateRandomState(rng);
@@ -147,9 +161,11 @@ public abstract class ReinforcementLearningTestBase
         Assert.NotNull(model.GetModelMetadata());
     }
 
-    [Fact]
-    public void Parameters_ShouldBeNonEmpty()
+    [Fact(Timeout = 60000)]
+    public async Task Parameters_ShouldBeNonEmpty()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var model = CreateModel();
         Assert.True(((IParameterizable<double, Vector<double>, Vector<double>>)model).GetParameters().Length > 0, "RL agent should have parameters.");
     }

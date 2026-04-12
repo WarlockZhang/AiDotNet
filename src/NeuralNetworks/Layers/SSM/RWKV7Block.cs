@@ -413,8 +413,8 @@ public partial class RWKV7Block<T> : LayerBase<T>
         if (rank < 3) batchSize = 1;
 
         var input3D = rank == 2
-            ? input.Reshape(1, seqLen, modelDim)
-            : input.Reshape(batchSize, seqLen, modelDim);
+            ? Engine.Reshape(input, new[] { 1, seqLen, modelDim })
+            : Engine.Reshape(input, new[] { batchSize, seqLen, modelDim });
 
         _lastInput = input3D;
 
@@ -440,14 +440,14 @@ public partial class RWKV7Block<T> : LayerBase<T>
         _lastOutput = result;
 
         if (rank == 2)
-            return result.Reshape(seqLen, _modelDimension);
+            return Engine.Reshape(result, new[] { seqLen, _modelDimension });
 
         var outputShape = new int[rank];
         for (int i = 0; i < rank - 2; i++)
             outputShape[i] = input.Shape[i];
         outputShape[rank - 2] = seqLen;
         outputShape[rank - 1] = _modelDimension;
-        return result.Reshape(outputShape);
+        return Engine.Reshape(result, outputShape);
     }
 
     /// <summary>
@@ -809,7 +809,7 @@ public partial class RWKV7Block<T> : LayerBase<T>
             }
 
             // dR = dGated * wkv_num * sigmoid'(r)
-            var ones = Tensor<T>.CreateDefault(sigR.Shape.ToArray(), NumOps.One);
+            var ones = Tensor<T>.CreateDefault(sigR._shape, NumOps.One);
             var sigDeriv = Engine.TensorMultiply(sigR, Engine.TensorSubtract(ones, sigR));
             var dR = Engine.TensorMultiply(Engine.TensorMultiply(dGated, wkvNum), sigDeriv);
 

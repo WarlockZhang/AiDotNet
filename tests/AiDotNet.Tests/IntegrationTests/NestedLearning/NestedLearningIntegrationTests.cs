@@ -2,6 +2,7 @@ using System;
 using AiDotNet.LinearAlgebra;
 using AiDotNet.NestedLearning;
 using Xunit;
+using System.Threading.Tasks;
 
 namespace AiDotNet.Tests.IntegrationTests.NestedLearning;
 
@@ -15,8 +16,8 @@ public class NestedLearningIntegrationTests
 
     #region AssociativeMemory Tests
 
-    [Fact]
-    public void AssociativeMemory_Constructor_CreatesValidInstance()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_Constructor_CreatesValidInstance()
     {
         // Arrange & Act
         var memory = new AssociativeMemory<double>(dimension: 8, capacity: 100);
@@ -27,8 +28,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(0, memory.MemoryCount);
     }
 
-    [Fact]
-    public void AssociativeMemory_Associate_StoresMemory()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_Associate_StoresMemory()
     {
         // Arrange
         var memory = new AssociativeMemory<double>(dimension: 4, capacity: 10);
@@ -42,8 +43,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(1, memory.MemoryCount);
     }
 
-    [Fact]
-    public void AssociativeMemory_Associate_MaintainsCapacityLimit()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_Associate_MaintainsCapacityLimit()
     {
         // Arrange
         var capacity = 5;
@@ -61,8 +62,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(capacity, memory.MemoryCount);
     }
 
-    [Fact]
-    public void AssociativeMemory_Associate_UpdatesAssociationMatrix()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_Associate_StoresAndRecallsTarget()
     {
         // Arrange
         var memory = new AssociativeMemory<double>(dimension: 4, capacity: 10);
@@ -72,13 +73,16 @@ public class NestedLearningIntegrationTests
         // Act
         memory.Associate(input, target);
 
-        // Assert - Matrix should have non-zero values after association
-        var matrix = memory.GetAssociationMatrix();
-        Assert.True(HasNonZeroElements(matrix));
+        // Assert - Retrieving with the same input should return the target
+        Assert.Equal(1, memory.MemoryCount);
+        var retrieved = memory.Retrieve(input);
+        Assert.Equal(4, retrieved.Length);
+        for (int i = 0; i < 4; i++)
+            Assert.Equal(target[i], retrieved[i], Tolerance);
     }
 
-    [Fact]
-    public void AssociativeMemory_Retrieve_ReturnsValidVector()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_Retrieve_ReturnsValidVector()
     {
         // Arrange
         var memory = new AssociativeMemory<double>(dimension: 4, capacity: 10);
@@ -95,8 +99,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(4, retrieved.Length);
     }
 
-    [Fact]
-    public void AssociativeMemory_Retrieve_ReturnsExactMatchForSameInput()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_Retrieve_ReturnsExactMatchForSameInput()
     {
         // Arrange
         var memory = new AssociativeMemory<double>(dimension: 4, capacity: 10);
@@ -119,8 +123,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(4, retrieved.Length);
     }
 
-    [Fact]
-    public void AssociativeMemory_Retrieve_WithDimensionMismatch_ThrowsException()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_Retrieve_WithDimensionMismatch_ThrowsException()
     {
         // Arrange
         var memory = new AssociativeMemory<double>(dimension: 4, capacity: 10);
@@ -130,8 +134,8 @@ public class NestedLearningIntegrationTests
         Assert.Throws<ArgumentException>(() => memory.Retrieve(wrongDimQuery));
     }
 
-    [Fact]
-    public void AssociativeMemory_Associate_WithDimensionMismatch_ThrowsException()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_Associate_WithDimensionMismatch_ThrowsException()
     {
         // Arrange
         var memory = new AssociativeMemory<double>(dimension: 4, capacity: 10);
@@ -142,8 +146,8 @@ public class NestedLearningIntegrationTests
         Assert.Throws<ArgumentException>(() => memory.Associate(input, wrongDimTarget));
     }
 
-    [Fact]
-    public void AssociativeMemory_Update_ModifiesAssociationMatrix()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_Update_ChangesRetrievalResult()
     {
         // Arrange
         var memory = new AssociativeMemory<double>(dimension: 4, capacity: 10);
@@ -152,18 +156,25 @@ public class NestedLearningIntegrationTests
 
         // Initial association
         memory.Associate(input, target);
-        var matrixBefore = CopyMatrix(memory.GetAssociationMatrix());
+        var retrievedBefore = memory.Retrieve(input);
 
-        // Act - Update with different learning rate
-        memory.Update(input, target, 0.1);
+        // Act - Update with a different target should change recall
+        var newTarget = CreateRandomVector(4, 99);
+        memory.Update(input, newTarget, 1.0);
 
-        // Assert - Matrix should have changed
-        var matrixAfter = memory.GetAssociationMatrix();
-        Assert.False(MatricesEqual(matrixBefore, matrixAfter, Tolerance));
+        // Assert - Retrieval should now reflect the updated target
+        var retrievedAfter = memory.Retrieve(input);
+        bool changed = false;
+        for (int i = 0; i < 4; i++)
+        {
+            if (Math.Abs(retrievedBefore[i] - retrievedAfter[i]) > Tolerance)
+                changed = true;
+        }
+        Assert.True(changed, "Update should change retrieval result");
     }
 
-    [Fact]
-    public void AssociativeMemory_Clear_ResetsMemory()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_Clear_ResetsMemory()
     {
         // Arrange
         var memory = new AssociativeMemory<double>(dimension: 4, capacity: 10);
@@ -179,8 +190,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(0, memory.MemoryCount);
     }
 
-    [Fact]
-    public void AssociativeMemory_MultipleAssociations_ImproveRetrieval()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_MultipleAssociations_ImproveRetrieval()
     {
         // Arrange
         var memory = new AssociativeMemory<double>(dimension: 4, capacity: 100);
@@ -213,8 +224,8 @@ public class NestedLearningIntegrationTests
 
     #region ContextFlow Tests
 
-    [Fact]
-    public void ContextFlow_Constructor_CreatesValidInstance()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_Constructor_CreatesValidInstance()
     {
         // Arrange & Act
         var contextFlow = new ContextFlow<double>(contextDimension: 8, numLevels: 3);
@@ -224,8 +235,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(3, contextFlow.NumberOfLevels);
     }
 
-    [Fact]
-    public void ContextFlow_Constructor_InitializesMatrices()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_Constructor_InitializesMatrices()
     {
         // Arrange & Act
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 2);
@@ -242,8 +253,8 @@ public class NestedLearningIntegrationTests
         Assert.True(HasNonZeroElements(compressionMatrices[0]));
     }
 
-    [Fact]
-    public void ContextFlow_PropagateContext_ReturnsValidOutput()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_PropagateContext_ReturnsValidOutput()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -257,8 +268,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(4, output.Length);
     }
 
-    [Fact]
-    public void ContextFlow_PropagateContext_UpdatesContextState()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_PropagateContext_UpdatesContextState()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -275,8 +286,8 @@ public class NestedLearningIntegrationTests
         Assert.False(IsZeroVector(stateAfter)); // State should be updated
     }
 
-    [Fact]
-    public void ContextFlow_PropagateContext_InvalidLevel_ThrowsException()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_PropagateContext_InvalidLevel_ThrowsException()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -287,8 +298,8 @@ public class NestedLearningIntegrationTests
         Assert.Throws<ArgumentException>(() => contextFlow.PropagateContext(input, currentLevel: 3));
     }
 
-    [Fact]
-    public void ContextFlow_ComputeContextGradients_ReturnsValidOutput()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_ComputeContextGradients_ReturnsValidOutput()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -302,8 +313,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(4, gradient.Length);
     }
 
-    [Fact]
-    public void ContextFlow_ComputeContextGradients_InvalidLevel_ThrowsException()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_ComputeContextGradients_InvalidLevel_ThrowsException()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -314,8 +325,8 @@ public class NestedLearningIntegrationTests
         Assert.Throws<ArgumentException>(() => contextFlow.ComputeContextGradients(upstreamGradient, level: 3));
     }
 
-    [Fact]
-    public void ContextFlow_UpdateFlow_ModifiesTransformationMatrices()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_UpdateFlow_ModifiesTransformationMatrices()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 2);
@@ -342,8 +353,8 @@ public class NestedLearningIntegrationTests
         Assert.False(MatricesEqual(matrixBefore, matrixAfter, Tolerance));
     }
 
-    [Fact]
-    public void ContextFlow_UpdateFlow_InvalidGradientsCount_ThrowsException()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_UpdateFlow_InvalidGradientsCount_ThrowsException()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 2);
@@ -354,8 +365,8 @@ public class NestedLearningIntegrationTests
         Assert.Throws<ArgumentException>(() => contextFlow.UpdateFlow(gradients, learningRates));
     }
 
-    [Fact]
-    public void ContextFlow_UpdateFlow_InvalidLearningRatesCount_ThrowsException()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_UpdateFlow_InvalidLearningRatesCount_ThrowsException()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 2);
@@ -370,8 +381,8 @@ public class NestedLearningIntegrationTests
         Assert.Throws<ArgumentException>(() => contextFlow.UpdateFlow(gradients, learningRates));
     }
 
-    [Fact]
-    public void ContextFlow_GetContextState_ReturnsValidState()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_GetContextState_ReturnsValidState()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -384,8 +395,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(4, state.Length);
     }
 
-    [Fact]
-    public void ContextFlow_GetContextState_InvalidLevel_ThrowsException()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_GetContextState_InvalidLevel_ThrowsException()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -395,8 +406,8 @@ public class NestedLearningIntegrationTests
         Assert.Throws<ArgumentException>(() => contextFlow.GetContextState(level: 3));
     }
 
-    [Fact]
-    public void ContextFlow_CompressContext_ReturnsValidOutput()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_CompressContext_ReturnsValidOutput()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -410,8 +421,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(4, compressed.Length);
     }
 
-    [Fact]
-    public void ContextFlow_CompressContext_InvalidLevel_ThrowsException()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_CompressContext_InvalidLevel_ThrowsException()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -422,8 +433,8 @@ public class NestedLearningIntegrationTests
         Assert.Throws<ArgumentException>(() => contextFlow.CompressContext(context, targetLevel: 3));
     }
 
-    [Fact]
-    public void ContextFlow_Reset_ClearsContextStates()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_Reset_ClearsContextStates()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -445,8 +456,8 @@ public class NestedLearningIntegrationTests
         Assert.True(IsZeroVector(contextFlow.GetContextState(2)));
     }
 
-    [Fact]
-    public void ContextFlow_MultipleLevels_IndependentStates()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_MultipleLevels_IndependentStates()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);
@@ -471,8 +482,8 @@ public class NestedLearningIntegrationTests
 
     #region Integration Tests
 
-    [Fact]
-    public void AssociativeMemory_ContextFlow_Integration_WorksTogether()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_ContextFlow_Integration_WorksTogether()
     {
         // Arrange
         var dimension = 8;
@@ -502,8 +513,8 @@ public class NestedLearningIntegrationTests
         Assert.False(IsZeroVector(contextFlow.GetContextState(1)));
     }
 
-    [Fact]
-    public void AssociativeMemory_LargeCapacity_HandlesCorrectly()
+    [Fact(Timeout = 120000)]
+    public async Task AssociativeMemory_LargeCapacity_HandlesCorrectly()
     {
         // Arrange
         var memory = new AssociativeMemory<double>(dimension: 16, capacity: 1000);
@@ -521,8 +532,8 @@ public class NestedLearningIntegrationTests
         Assert.Equal(1000, memory.Capacity);
     }
 
-    [Fact]
-    public void ContextFlow_SequentialPropagation_AccumulatesState()
+    [Fact(Timeout = 120000)]
+    public async Task ContextFlow_SequentialPropagation_AccumulatesState()
     {
         // Arrange
         var contextFlow = new ContextFlow<double>(contextDimension: 4, numLevels: 3);

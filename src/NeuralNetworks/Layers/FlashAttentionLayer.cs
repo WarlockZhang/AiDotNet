@@ -49,31 +49,19 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
     /// </summary>
     public double RoPETheta => _ropeLayer?.Theta ?? 10000.0;
 
-    // Projection weights
-    private Matrix<T> _queryWeights;
-    private Matrix<T> _keyWeights;
-    private Matrix<T> _valueWeights;
-    private Matrix<T> _outputWeights;
-    private Vector<T> _outputBias;
+    // Projection weights stored as Tensor<T> so they can participate in the
+    // gradient tape. Previously stored as Matrix<T> / Vector<T>, which
+    // silently excluded them from the tape graph entirely — every diffusion
+    // UNet attention block was training nothing through these weights.
+    private Tensor<T> _queryWeights;
+    private Tensor<T> _keyWeights;
+    private Tensor<T> _valueWeights;
+    private Tensor<T> _outputWeights;
+    private Tensor<T> _outputBias;
 
-    // Cached values for backward pass
-    private Tensor<T>? _lastInput;
-    private Tensor<T>? _lastOutput;
-    private Tensor<T>? _lastQuery;
-    private Tensor<T>? _lastKey;
-    private Tensor<T>? _lastValue;
-    private Tensor<T>? _lastAttentionOutput;
-    private Tensor<T>? _lastSoftmaxStats;
-    private Tensor<T>? _lastAlibiBias;
-    private double _lastScale;
+    // Tracks the original input shape so ForwardGpu / Forward can reshape the
+    // output back to the caller's rank before returning.
     private int[]? _originalInputShape;
-
-    // Gradients
-    private Matrix<T>? _queryWeightsGradient;
-    private Matrix<T>? _keyWeightsGradient;
-    private Matrix<T>? _valueWeightsGradient;
-    private Matrix<T>? _outputWeightsGradient;
-    private Vector<T>? _outputBiasGradient;
 
     /// <summary>
     /// Gets whether this layer supports training.
@@ -137,14 +125,15 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
         _headDimension = embeddingDimension / headCount;
         _config = config ?? FlashAttentionConfig.Default;
 
-        // Initialize projection weights
-        _queryWeights = new Matrix<T>(embeddingDimension, embeddingDimension);
-        _keyWeights = new Matrix<T>(embeddingDimension, embeddingDimension);
-        _valueWeights = new Matrix<T>(embeddingDimension, embeddingDimension);
-        _outputWeights = new Matrix<T>(embeddingDimension, embeddingDimension);
-        _outputBias = new Vector<T>(embeddingDimension);
+        // Initialize projection weights as Tensor<T> [embedDim, embedDim].
+        _queryWeights = new Tensor<T>([embeddingDimension, embeddingDimension]);
+        _keyWeights = new Tensor<T>([embeddingDimension, embeddingDimension]);
+        _valueWeights = new Tensor<T>([embeddingDimension, embeddingDimension]);
+        _outputWeights = new Tensor<T>([embeddingDimension, embeddingDimension]);
+        _outputBias = new Tensor<T>([embeddingDimension]);
 
         InitializeParameters();
+        RegisterAttentionParameters();
     }
 
     /// <summary>
@@ -172,13 +161,27 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
         _headDimension = embeddingDimension / headCount;
         _config = config ?? FlashAttentionConfig.Default;
 
-        _queryWeights = new Matrix<T>(embeddingDimension, embeddingDimension);
-        _keyWeights = new Matrix<T>(embeddingDimension, embeddingDimension);
-        _valueWeights = new Matrix<T>(embeddingDimension, embeddingDimension);
-        _outputWeights = new Matrix<T>(embeddingDimension, embeddingDimension);
-        _outputBias = new Vector<T>(embeddingDimension);
+        _queryWeights = new Tensor<T>([embeddingDimension, embeddingDimension]);
+        _keyWeights = new Tensor<T>([embeddingDimension, embeddingDimension]);
+        _valueWeights = new Tensor<T>([embeddingDimension, embeddingDimension]);
+        _outputWeights = new Tensor<T>([embeddingDimension, embeddingDimension]);
+        _outputBias = new Tensor<T>([embeddingDimension]);
 
         InitializeParameters();
+        RegisterAttentionParameters();
+    }
+
+    /// <summary>
+    /// Registers all trainable projection tensors with the layer base so that
+    /// recursive parameter collection and tape-based gradient training pick them up.
+    /// </summary>
+    private void RegisterAttentionParameters()
+    {
+        RegisterTrainableParameter(_queryWeights, PersistentTensorRole.Weights);
+        RegisterTrainableParameter(_keyWeights, PersistentTensorRole.Weights);
+        RegisterTrainableParameter(_valueWeights, PersistentTensorRole.Weights);
+        RegisterTrainableParameter(_outputWeights, PersistentTensorRole.Weights);
+        RegisterTrainableParameter(_outputBias, PersistentTensorRole.Biases);
     }
 
     /// <summary>
@@ -219,25 +222,27 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
     /// </summary>
     private void InitializeParameters()
     {
-        T scale = NumOps.Sqrt(NumOps.FromDouble(2.0 / (_queryWeights.Rows + _queryWeights.Columns)));
+        int rows = _queryWeights.Shape[0];
+        int cols = _queryWeights.Shape[1];
+        T scale = NumOps.Sqrt(NumOps.FromDouble(2.0 / (rows + cols)));
 
-        InitializeMatrix(_queryWeights, scale);
-        InitializeMatrix(_keyWeights, scale);
-        InitializeMatrix(_valueWeights, scale);
-        InitializeMatrix(_outputWeights, scale);
+        InitializeWeightTensor(_queryWeights, scale);
+        InitializeWeightTensor(_keyWeights, scale);
+        InitializeWeightTensor(_valueWeights, scale);
+        InitializeWeightTensor(_outputWeights, scale);
 
-        // Initialize bias to zero
-        _outputBias = Vector<T>.CreateDefault(_outputBias.Length, NumOps.Zero);
+        // Bias starts at zero. Write in-place so any existing tape references
+        // (or already-registered parameter entries) keep the same tensor handle.
+        var biasSpan = _outputBias.Data.Span;
+        for (int i = 0; i < biasSpan.Length; i++) biasSpan[i] = NumOps.Zero;
     }
 
-    private void InitializeMatrix(Matrix<T> matrix, T scale)
+    private void InitializeWeightTensor(Tensor<T> weights, T scale)
     {
-        for (int i = 0; i < matrix.Rows; i++)
+        var span = weights.Data.Span;
+        for (int i = 0; i < span.Length; i++)
         {
-            for (int j = 0; j < matrix.Columns; j++)
-            {
-                matrix[i, j] = NumOps.Multiply(NumOps.FromDouble(Random.NextDouble() - 0.5), scale);
-            }
+            span[i] = NumOps.Multiply(NumOps.FromDouble(Random.NextDouble() - 0.5), scale);
         }
     }
 
@@ -265,17 +270,30 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
     {
         _originalInputShape = input._shape;
         var input3D = NormalizeTo3D(input, out int batchSize, out int sequenceLength, out int embeddingDimension);
-        _lastInput = input3D;
 
-        // Project input to Q, K, V
-        var queries = input3D.Multiply(_queryWeights);
-        var keys = input3D.Multiply(_keyWeights);
-        var values = input3D.Multiply(_valueWeights);
+        // Every shape + projection op goes through Engine so the gradient tape
+        // records the forward chain. The previous implementation used direct
+        // Tensor<T>.Multiply / .Reshape / .Transpose / .Add, which bypassed the
+        // tape and left the attention block's weights with zero gradient on
+        // every diffusion training step.
 
-        // Reshape to [batch, heads, seq, headDim]
-        queries = queries.Reshape(batchSize, sequenceLength, _headCount, _headDimension).Transpose([0, 2, 1, 3]);
-        keys = keys.Reshape(batchSize, sequenceLength, _headCount, _headDimension).Transpose([0, 2, 1, 3]);
-        values = values.Reshape(batchSize, sequenceLength, _headCount, _headDimension).Transpose([0, 2, 1, 3]);
+        // Project input to Q, K, V via tape-tracked matmul.
+        // input3D is [batch, seq, embed]; weights are [embed, embed].
+        // Engine.TensorMatMul handles the any-rank generalization.
+        var queries = Engine.TensorMatMul(input3D, _queryWeights);
+        var keys = Engine.TensorMatMul(input3D, _keyWeights);
+        var values = Engine.TensorMatMul(input3D, _valueWeights);
+
+        // Reshape to [batch, heads, seq, headDim] via tape-tracked shape ops.
+        queries = Engine.TensorPermute(
+            Engine.Reshape(queries, new[] { batchSize, sequenceLength, _headCount, _headDimension }),
+            new[] { 0, 2, 1, 3 });
+        keys = Engine.TensorPermute(
+            Engine.Reshape(keys, new[] { batchSize, sequenceLength, _headCount, _headDimension }),
+            new[] { 0, 2, 1, 3 });
+        values = Engine.TensorPermute(
+            Engine.Reshape(values, new[] { batchSize, sequenceLength, _headCount, _headDimension }),
+            new[] { 0, 2, 1, 3 });
 
         // Apply RoPE to Q and K if configured
         if (_ropeLayer != null)
@@ -283,64 +301,48 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
             (queries, keys) = _ropeLayer.ApplyRoPE(queries, keys, startPosition: 0);
         }
 
-        // Cache for backward pass
-        _lastQuery = queries;
-        _lastKey = keys;
-        _lastValue = values;
-
-        // Compute scale factor for attention
+        // Compute scale factor for attention (null lets IEngine use 1/sqrt(headDim))
         double? scale = _config.ScaleFactor.HasValue
             ? (double)_config.ScaleFactor.Value
-            : null; // null means 1/sqrt(headDim) will be computed by IEngine
-        _lastScale = scale ?? 1.0 / Math.Sqrt(_headDimension);
+            : null;
 
-        Tensor<T> attentionOutput;
-        Tensor<T>? softmaxStats;
-
-        // Compute ALiBi bias if configured, passing it directly to the engine
+        // Compute ALiBi bias if configured, passing it directly to the engine.
+        // The engine natively supports additive attention bias.
         Tensor<T>? aliBiBias = _alibiLayer != null
             ? _alibiLayer.ComputeBias(queries.Shape[2], keys.Shape[2], _config.UseCausalMask)
             : null;
-        _lastAlibiBias = aliBiBias;
 
-        // Apply Flash Attention using IEngine for GPU acceleration
-        // The engine now natively supports additive attention bias (e.g. ALiBi)
-        attentionOutput = Engine.FlashAttention(
+        // Apply Flash Attention — tape records the op so backward flows through
+        // FlashAttentionBackward automatically via the gradient tape.
+        var attentionOutput = Engine.FlashAttention(
             queries,
             keys,
             values,
             scale,
             _config.UseCausalMask,
-            out softmaxStats,
+            out _,
             attentionBias: aliBiBias);
 
-        _lastAttentionOutput = attentionOutput;
-        _lastSoftmaxStats = softmaxStats;
+        // Reshape back to [batch, seq, embedding] via tape-tracked shape ops.
+        var permutedOut = Engine.TensorPermute(attentionOutput, new[] { 0, 2, 1, 3 });
+        attentionOutput = Engine.Reshape(permutedOut, new[] { batchSize, sequenceLength, embeddingDimension });
 
-        // Reshape back to [batch, seq, embedding]
-        attentionOutput = attentionOutput.Transpose([0, 2, 1, 3]).Reshape(batchSize, sequenceLength, embeddingDimension);
-
-        // Output projection
-        var output = attentionOutput.Multiply(_outputWeights).Add(_outputBias);
-
-        _lastOutput = ApplyActivation(output);
+        // Output projection with broadcast bias add — all tape-tracked.
+        var projected = Engine.TensorMatMul(attentionOutput, _outputWeights);
+        var output = Engine.TensorBroadcastAdd(projected, _outputBias);
+        var activated = ApplyActivation(output);
 
         if (_originalInputShape == null || _originalInputShape.Length == 3)
         {
-            return _lastOutput;
-        }
-
-        if (_originalInputShape.Length == 2)
-        {
-            return _lastOutput.Reshape(_originalInputShape);
+            return activated;
         }
 
         if (_originalInputShape.Length == 1)
         {
-            return _lastOutput.Reshape([embeddingDimension]);
+            return Engine.Reshape(activated, new[] { embeddingDimension });
         }
 
-        return _lastOutput.Reshape(_originalInputShape);
+        return Engine.Reshape(activated, _originalInputShape);
     }
 
     private Tensor<T> NormalizeTo3D(Tensor<T> input, out int batchSize, out int sequenceLength, out int embeddingDimension)
@@ -358,7 +360,7 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
             batchSize = 1;
             sequenceLength = input.Shape[0];
             embeddingDimension = input.Shape[1];
-            return input.Reshape([1, sequenceLength, embeddingDimension]);
+            return Engine.Reshape(input, new[] { 1, sequenceLength, embeddingDimension });
         }
 
         if (input.Rank > 3)
@@ -371,81 +373,26 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
             batchSize = flatBatch;
             sequenceLength = input.Shape[input.Rank - 2];
             embeddingDimension = input.Shape[input.Rank - 1];
-            return input.Reshape([batchSize, sequenceLength, embeddingDimension]);
+            return Engine.Reshape(input, new[] { batchSize, sequenceLength, embeddingDimension });
         }
 
         batchSize = 1;
         sequenceLength = 1;
         embeddingDimension = input.Shape[0];
-        return input.Reshape([1, 1, embeddingDimension]);
-    }
-
-    private Tensor<T> NormalizeOutputGradient(Tensor<T> outputGradient, out int batchSize, out int sequenceLength, out int embeddingDimension)
-    {
-        if (_originalInputShape == null)
-        {
-            return NormalizeTo3D(outputGradient, out batchSize, out sequenceLength, out embeddingDimension);
-        }
-
-        if (_originalInputShape.Length == 3)
-        {
-            batchSize = _originalInputShape[0];
-            sequenceLength = _originalInputShape[1];
-            embeddingDimension = _originalInputShape[2];
-            return outputGradient;
-        }
-
-        if (_originalInputShape.Length == 2)
-        {
-            batchSize = 1;
-            sequenceLength = _originalInputShape[0];
-            embeddingDimension = _originalInputShape[1];
-            return outputGradient.Reshape([1, sequenceLength, embeddingDimension]);
-        }
-
-        if (_originalInputShape.Length == 1)
-        {
-            batchSize = 1;
-            sequenceLength = 1;
-            embeddingDimension = _originalInputShape[0];
-            return outputGradient.Reshape([1, 1, embeddingDimension]);
-        }
-
-        int flatBatch = 1;
-        for (int d = 0; d < _originalInputShape.Length - 2; d++)
-        {
-            flatBatch *= _originalInputShape[d];
-        }
-        batchSize = flatBatch;
-        sequenceLength = _originalInputShape[^2];
-        embeddingDimension = _originalInputShape[^1];
-        return outputGradient.Reshape([batchSize, sequenceLength, embeddingDimension]);
-    }
-    private Matrix<T> ComputeWeightGradient(Tensor<T> input, Tensor<T> gradient)
-    {
-        // Sum over batch dimension: input^T @ gradient
-        var inputT = input.Transpose([0, 2, 1]);
-        var grad = inputT.Multiply(gradient);
-        return grad.Sum([0]).ToMatrix();
+        return Engine.Reshape(input, new[] { 1, 1, embeddingDimension });
     }
 
     /// <summary>
-    /// Updates parameters using computed gradients.
+    /// Legacy scalar-learning-rate parameter update. Tape-based training flows through
+    /// <see cref="SetParameters"/> after <c>GradientTape&lt;T&gt;</c> computes gradients and
+    /// the optimizer applies them, so this override is a no-op. The hand-rolled SPSA /
+    /// blame-on-step fallback that used private <c>_*Gradient</c> fields was deleted along
+    /// with those fields once the Forward path moved to <c>Engine.FlashAttention</c>.
     /// </summary>
     public override void UpdateParameters(T learningRate)
     {
-        if (_queryWeightsGradient == null || _keyWeightsGradient == null ||
-            _valueWeightsGradient == null || _outputWeightsGradient == null ||
-            _outputBiasGradient == null)
-        {
-            throw new InvalidOperationException("Backward pass must be called before updating parameters.");
-        }
-
-        _queryWeights = _queryWeights.Subtract(_queryWeightsGradient.Multiply(learningRate));
-        _keyWeights = _keyWeights.Subtract(_keyWeightsGradient.Multiply(learningRate));
-        _valueWeights = _valueWeights.Subtract(_valueWeightsGradient.Multiply(learningRate));
-        _outputWeights = _outputWeights.Subtract(_outputWeightsGradient.Multiply(learningRate));
-        _outputBias = _outputBias.Subtract(_outputBiasGradient.Multiply(learningRate));
+        // No-op: weights are updated via SetParameters(Vector<T>) after the tape
+        // computes gradients through Engine.FlashAttention + FlashAttentionBackward.
     }
 
     /// <summary>
@@ -453,37 +400,42 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
     /// </summary>
     public override Vector<T> GetParameters()
     {
-        int totalParams = _queryWeights.Rows * _queryWeights.Columns * 4 + _outputBias.Length;
+        int weightLen = _queryWeights.Length; // embed × embed
+        int totalParams = weightLen * 4 + _outputBias.Length;
         var parameters = new Vector<T>(totalParams);
         int index = 0;
 
-        // Copy all weight matrices
-        foreach (var matrix in new[] { _queryWeights, _keyWeights, _valueWeights, _outputWeights })
+        // Copy all weight tensors (flat span)
+        foreach (var tensor in new[] { _queryWeights, _keyWeights, _valueWeights, _outputWeights })
         {
-            for (int i = 0; i < matrix.Rows; i++)
+            var span = tensor.AsSpan();
+            for (int i = 0; i < span.Length; i++)
             {
-                for (int j = 0; j < matrix.Columns; j++)
-                {
-                    parameters[index++] = matrix[i, j];
-                }
+                parameters[index++] = span[i];
             }
         }
 
         // Copy bias
-        for (int i = 0; i < _outputBias.Length; i++)
+        var biasSpan = _outputBias.AsSpan();
+        for (int i = 0; i < biasSpan.Length; i++)
         {
-            parameters[index++] = _outputBias[i];
+            parameters[index++] = biasSpan[i];
         }
 
         return parameters;
     }
 
     /// <summary>
-    /// Sets all layer parameters from a single vector.
+    /// Sets all layer parameters from a single vector. Writes in place so the
+    /// registered tensor references remain stable — important for tape-based
+    /// training where the gradient graph holds direct references to these
+    /// tensors. Re-assigning the field would leave the tape pointing at stale
+    /// objects.
     /// </summary>
     public override void SetParameters(Vector<T> parameters)
     {
-        int expectedParams = _queryWeights.Rows * _queryWeights.Columns * 4 + _outputBias.Length;
+        int weightLen = _queryWeights.Length;
+        int expectedParams = weightLen * 4 + _outputBias.Length;
         if (parameters.Length != expectedParams)
         {
             throw new ArgumentException($"Expected {expectedParams} parameters, got {parameters.Length}");
@@ -491,20 +443,19 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
 
         int index = 0;
 
-        foreach (var matrix in new[] { _queryWeights, _keyWeights, _valueWeights, _outputWeights })
+        foreach (var tensor in new[] { _queryWeights, _keyWeights, _valueWeights, _outputWeights })
         {
-            for (int i = 0; i < matrix.Rows; i++)
+            var span = tensor.Data.Span;
+            for (int i = 0; i < span.Length; i++)
             {
-                for (int j = 0; j < matrix.Columns; j++)
-                {
-                    matrix[i, j] = parameters[index++];
-                }
+                span[i] = parameters[index++];
             }
         }
 
-        for (int i = 0; i < _outputBias.Length; i++)
+        var biasSpan = _outputBias.Data.Span;
+        for (int i = 0; i < biasSpan.Length; i++)
         {
-            _outputBias[i] = parameters[index++];
+            biasSpan[i] = parameters[index++];
         }
     }
 
@@ -513,35 +464,7 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
     /// </summary>
     public override void ResetState()
     {
-        _lastInput = null;
-        _lastOutput = null;
-        _lastQuery = null;
-        _lastKey = null;
-        _lastValue = null;
-        _lastAttentionOutput = null;
-        _lastSoftmaxStats = null;
-        _lastAlibiBias = null;
-        _lastScale = 0;
         _originalInputShape = null;
-
-        _queryWeightsGradient = null;
-        _keyWeightsGradient = null;
-        _valueWeightsGradient = null;
-        _outputWeightsGradient = null;
-        _outputBiasGradient = null;
-    }
-
-    private Tensor<T> MatrixToTensor(Matrix<T> matrix)
-    {
-        var tensor = new Tensor<T>(new[] { matrix.Rows, matrix.Columns });
-        for (int i = 0; i < matrix.Rows; i++)
-        {
-            for (int j = 0; j < matrix.Columns; j++)
-            {
-                tensor[i, j] = matrix[i, j];
-            }
-        }
-        return tensor;
     }
 
     /// <summary>
@@ -566,20 +489,20 @@ public partial class FlashAttentionLayer<T> : LayerBase<T>
     /// <summary>
     /// Gets the query projection weights (for external access/debugging).
     /// </summary>
-    public Matrix<T> GetQueryWeights() => _queryWeights;
+    public Tensor<T> GetQueryWeights() => _queryWeights;
 
     /// <summary>
     /// Gets the key projection weights.
     /// </summary>
-    public Matrix<T> GetKeyWeights() => _keyWeights;
+    public Tensor<T> GetKeyWeights() => _keyWeights;
 
     /// <summary>
     /// Gets the value projection weights.
     /// </summary>
-    public Matrix<T> GetValueWeights() => _valueWeights;
+    public Tensor<T> GetValueWeights() => _valueWeights;
 
     /// <summary>
     /// Gets the output projection weights.
     /// </summary>
-    public Matrix<T> GetOutputWeights() => _outputWeights;
+    public Tensor<T> GetOutputWeights() => _outputWeights;
 }

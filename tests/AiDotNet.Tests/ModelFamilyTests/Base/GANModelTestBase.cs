@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -16,9 +18,11 @@ public abstract class GANModelTestBase : NeuralNetworkModelTestBase
     // The generator should produce output matching the declared OutputShape.
     // =====================================================
 
-    [Fact]
-    public void GeneratorOutput_ShouldHaveCorrectShape()
+    [Fact(Timeout = 120000)]
+    public async Task GeneratorOutput_ShouldHaveCorrectShape()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -39,9 +43,11 @@ public abstract class GANModelTestBase : NeuralNetworkModelTestBase
     // mode-collapsed — a fundamental GAN failure mode.
     // =====================================================
 
-    [Fact]
-    public void DifferentLatentInputs_ProduceDifferentOutputs()
+    [Fact(Timeout = 120000)]
+    public async Task DifferentLatentInputs_ProduceDifferentOutputs()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
 
         var input1 = CreateRandomTensor(InputShape, ModelTestHelpers.CreateSeededRandom(1));
@@ -71,9 +77,11 @@ public abstract class GANModelTestBase : NeuralNetworkModelTestBase
     // is likely misconfigured.
     // =====================================================
 
-    [Fact]
-    public void ParameterCount_ShouldBeSubstantial()
+    [Fact(Timeout = 120000)]
+    public async Task ParameterCount_ShouldBeSubstantial()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var parameters = network.GetParameters();
         Assert.True(parameters.Length > 100,
@@ -85,9 +93,11 @@ public abstract class GANModelTestBase : NeuralNetworkModelTestBase
     // Generated output values should not be extreme (no exploding values).
     // =====================================================
 
-    [Fact]
-    public void OutputValues_ShouldBeInReasonableRange()
+    [Fact(Timeout = 120000)]
+    public async Task OutputValues_ShouldBeInReasonableRange()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

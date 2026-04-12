@@ -4,6 +4,7 @@ using AiDotNet.Enums;
 using AiDotNet.NeuralNetworks;
 using AiDotNet.NeuralNetworks.Layers;
 using Xunit;
+using System.Threading.Tasks;
 
 namespace AiDotNet.Tests.UnitTests.NeuralNetworks;
 
@@ -14,8 +15,8 @@ public class EfficientNetTests
 {
     #region EfficientNet-B0 Tests
 
-    [Fact]
-    public void EfficientNetB0_Constructor_CreatesValidNetwork()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNetB0_Constructor_CreatesValidNetwork()
     {
         // Arrange & Act
         var network = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 10);
@@ -28,50 +29,56 @@ public class EfficientNetTests
         Assert.True(network.Layers.Count > 0);
     }
 
-    [Fact]
+    [Fact(Timeout = 120000)]
     [Trait("Category", "Integration")]
-    public void EfficientNetB0_Forward_ProducesCorrectOutputShape()
+    public async Task EfficientNetB0_Forward_ProducesCorrectOutputShape()
     {
+        await Task.Run(() =>
+        {
 #if NET471
-        // Skip on .NET Framework - BlasProvider requires MKL.NET which isn't available
-        return;
+            // Skip on .NET Framework - BlasProvider requires MKL.NET which isn't available
+            return;
 #else
-        // Arrange
-        var network = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 10);
-        // Input: [batch=1, channels=3, height=224, width=224]
-        var input = new Tensor<float>([1, 3, 224, 224]);
-        InitializeWithRandomValues(input);
+            // Arrange
+            var network = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 10);
+            // Input: [batch=1, channels=3, height=224, width=224]
+            var input = new Tensor<float>([1, 3, 224, 224]);
+            InitializeWithRandomValues(input);
 
-        // Act
-        var output = network.Forward(input);
+            // Act
+            var output = network.Forward(input);
 
-        // Assert
-        Assert.Equal(2, output.Shape.Length);
-        Assert.Equal(1, output.Shape[0]); // batch size
-        Assert.Equal(10, output.Shape[1]); // num classes
+            // Assert
+            Assert.Equal(2, output.Shape.Length);
+            Assert.Equal(1, output.Shape[0]); // batch size
+            Assert.Equal(10, output.Shape[1]); // num classes
 #endif
+        });
     }
 
-    [Fact]
+    [Fact(Timeout = 120000)]
     [Trait("Category", "Integration")]
-    public void EfficientNetB0_ForwardSmallInput_ProducesCorrectShape()
+    public async Task EfficientNetB0_ForwardSmallInput_ProducesCorrectShape()
     {
+        await Task.Run(() =>
+        {
 #if NET471
-        // Skip on .NET Framework - BlasProvider requires MKL.NET which isn't available
-        return;
+            // Skip on .NET Framework - BlasProvider requires MKL.NET which isn't available
+            return;
 #else
-        // Arrange - Use the static factory method
-        var network = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 5);
-        // We still need to use the expected resolution
-        var input = new Tensor<float>([1, 3, 224, 224]);
-        InitializeWithRandomValues(input);
+            // Arrange - Use the static factory method
+            var network = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 5);
+            // We still need to use the expected resolution
+            var input = new Tensor<float>([1, 3, 224, 224]);
+            InitializeWithRandomValues(input);
 
-        // Act
-        var output = network.Forward(input);
+            // Act
+            var output = network.Forward(input);
 
-        // Assert
-        Assert.Equal(5, output.Shape[1]); // num classes
+            // Assert
+            Assert.Equal(5, output.Shape[1]); // num classes
 #endif
+        });
     }
 
     #endregion
@@ -100,8 +107,8 @@ public class EfficientNetTests
         Assert.Equal(expectedResolution, network.InputResolution);
     }
 
-    [Fact]
-    public void EfficientNetB1_CreatesValidNetwork()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNetB1_CreatesValidNetwork()
     {
         // Arrange & Act
         var network = EfficientNetNetwork<float>.EfficientNetB1(numClasses: 100);
@@ -113,8 +120,8 @@ public class EfficientNetTests
         Assert.Equal(240, network.InputResolution);
     }
 
-    [Fact]
-    public void EfficientNetB2_CreatesValidNetwork()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNetB2_CreatesValidNetwork()
     {
         // Arrange & Act
         var network = EfficientNetNetwork<float>.EfficientNetB2(numClasses: 100);
@@ -125,8 +132,8 @@ public class EfficientNetTests
         Assert.Equal(260, network.InputResolution);
     }
 
-    [Fact]
-    public void EfficientNetB3_CreatesValidNetwork()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNetB3_CreatesValidNetwork()
     {
         // Arrange & Act
         var network = EfficientNetNetwork<float>.EfficientNetB3(numClasses: 100);
@@ -137,8 +144,8 @@ public class EfficientNetTests
         Assert.Equal(300, network.InputResolution);
     }
 
-    [Fact]
-    public void EfficientNetB4_CreatesValidNetwork()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNetB4_CreatesValidNetwork()
     {
         // Arrange & Act
         var network = EfficientNetNetwork<float>.EfficientNetB4(numClasses: 100);
@@ -149,8 +156,8 @@ public class EfficientNetTests
         Assert.Equal(380, network.InputResolution);
     }
 
-    [Fact]
-    public void EfficientNetB5_CreatesValidNetwork()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNetB5_CreatesValidNetwork()
     {
         // Arrange & Act
         var network = EfficientNetNetwork<float>.EfficientNetB5(numClasses: 100);
@@ -161,8 +168,8 @@ public class EfficientNetTests
         Assert.Equal(456, network.InputResolution);
     }
 
-    [Fact]
-    public void EfficientNetB6_CreatesValidNetwork()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNetB6_CreatesValidNetwork()
     {
         // Arrange & Act
         var network = EfficientNetNetwork<float>.EfficientNetB6(numClasses: 100);
@@ -173,8 +180,8 @@ public class EfficientNetTests
         Assert.Equal(528, network.InputResolution);
     }
 
-    [Fact]
-    public void EfficientNetB7_CreatesValidNetwork()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNetB7_CreatesValidNetwork()
     {
         // Arrange & Act
         var network = EfficientNetNetwork<float>.EfficientNetB7(numClasses: 100);
@@ -189,8 +196,8 @@ public class EfficientNetTests
 
     #region Configuration Tests
 
-    [Fact]
-    public void EfficientNetConfiguration_GetScalingCoefficients_ReturnsCorrectValues()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNetConfiguration_GetScalingCoefficients_ReturnsCorrectValues()
     {
         // Test B0
         var configB0 = new EfficientNetConfiguration(EfficientNetVariant.B0, numClasses: 10);
@@ -211,8 +218,8 @@ public class EfficientNetTests
         Assert.Equal(600, configB7.GetInputHeight());
     }
 
-    [Fact]
-    public void EfficientNet_WithCustomInputChannels_CreatesValidNetwork()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNet_WithCustomInputChannels_CreatesValidNetwork()
     {
         // Arrange - Single channel (grayscale) input
         var network = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 10, inputChannels: 1);
@@ -226,8 +233,8 @@ public class EfficientNetTests
 
     #region Swish Activation Tests
 
-    [Fact]
-    public void SwishActivation_Activate_ComputesCorrectValues()
+    [Fact(Timeout = 120000)]
+    public async Task SwishActivation_Activate_ComputesCorrectValues()
     {
         // Arrange
         var swish = new SwishActivation<float>();
@@ -250,8 +257,8 @@ public class EfficientNetTests
         Assert.True(atOne > 0.7f && atOne < 0.8f);
     }
 
-    [Fact]
-    public void SwishActivation_Derivative_ComputesCorrectValues()
+    [Fact(Timeout = 120000)]
+    public async Task SwishActivation_Derivative_ComputesCorrectValues()
     {
         // Arrange
         var swish = new SwishActivation<float>();
@@ -270,8 +277,8 @@ public class EfficientNetTests
         Assert.True(Math.Abs(derivAtNegative) < 0.1f);
     }
 
-    [Fact]
-    public void SwishActivation_ActivateVector_WorksCorrectly()
+    [Fact(Timeout = 120000)]
+    public async Task SwishActivation_ActivateVector_WorksCorrectly()
     {
         // Arrange
         var swish = new SwishActivation<float>();
@@ -288,8 +295,8 @@ public class EfficientNetTests
         Assert.True(output[3] > 1.7f); // Swish(2) ~ 1.762
     }
 
-    [Fact]
-    public void SwishActivation_SupportsJitCompilation()
+    [Fact(Timeout = 120000)]
+    public async Task SwishActivation_SupportsJitCompilation()
     {
         // Arrange
         var swish = new SwishActivation<float>();
@@ -302,8 +309,8 @@ public class EfficientNetTests
 
     #region Model Metadata Tests
 
-    [Fact]
-    public void EfficientNet_GetModelMetadata_ReturnsValidMetadata()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNet_GetModelMetadata_ReturnsValidMetadata()
     {
         // Arrange
         var network = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 10);
@@ -324,8 +331,8 @@ public class EfficientNetTests
 
     #region Compound Scaling Tests
 
-    [Fact]
-    public void EfficientNet_LargerVariants_HaveMoreLayers()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNet_LargerVariants_HaveMoreLayers()
     {
         // Arrange
         var b0 = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 10);
@@ -335,8 +342,8 @@ public class EfficientNetTests
         Assert.True(b3.Layers.Count >= b0.Layers.Count);
     }
 
-    [Fact]
-    public void EfficientNet_Clone_CreatesNewInstance()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNet_Clone_CreatesNewInstance()
     {
         // Arrange
         var original = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 10);
@@ -349,8 +356,8 @@ public class EfficientNetTests
         Assert.IsType<EfficientNetNetwork<float>>(clone);
     }
 
-    [Fact]
-    public void EfficientNet_GetLayer_ReturnsCorrectLayer()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNet_GetLayer_ReturnsCorrectLayer()
     {
         // Arrange
         var network = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 10);
@@ -364,8 +371,8 @@ public class EfficientNetTests
         Assert.IsType<DenseLayer<float>>(lastLayer); // Classification head
     }
 
-    [Fact]
-    public void EfficientNet_GetLayer_ThrowsOnInvalidIndex()
+    [Fact(Timeout = 120000)]
+    public async Task EfficientNet_GetLayer_ThrowsOnInvalidIndex()
     {
         // Arrange
         var network = EfficientNetNetwork<float>.EfficientNetB0(numClasses: 10);
@@ -379,7 +386,7 @@ public class EfficientNetTests
 
     #region Training Tests (Skipped for performance)
 
-    [Fact(Skip = "Training test - slow")]
+    [Fact(Timeout = 120000)]
     public void EfficientNetB0_Train_CompletesWithoutError()
     {
         // Arrange

@@ -374,7 +374,7 @@ public partial class DeformableConvolutionalLayer<T> : LayerBase<T>
         if (IsTrainingMode)
         {
             _gpuInput = input4D;
-            _gpuInputShape = input4D.Shape.ToArray().ToArray();
+            _gpuInputShape = input4D._shape.ToArray();
             _gpuOffsets = offsetsGpu;
             _gpuMask = maskGpu;
         }
@@ -539,7 +539,7 @@ public partial class DeformableConvolutionalLayer<T> : LayerBase<T>
         var gradInput = _engine.Conv2DBackwardInput(
             gradOutput,
             weights,
-            inputShape: input.Shape.ToArray(),
+            inputShape: input._shape,
             stride: new[] { _stride, _stride },
             padding: new[] { _padding, _padding },
             dilation: new[] { 1, 1 });
@@ -548,7 +548,7 @@ public partial class DeformableConvolutionalLayer<T> : LayerBase<T>
         var computedWeightGrad = _engine.Conv2DBackwardKernel(
             gradOutput,
             input,
-            kernelShape: weights.Shape.ToArray(),
+            kernelShape: weights._shape,
             stride: new[] { _stride, _stride },
             padding: new[] { _padding, _padding },
             dilation: new[] { 1, 1 });

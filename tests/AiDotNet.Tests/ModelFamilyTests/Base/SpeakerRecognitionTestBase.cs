@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -10,9 +12,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class SpeakerRecognitionTestBase : AudioNNModelTestBase
 {
-    [Fact]
-    public void SameInput_SameEmbedding()
+    [Fact(Timeout = 60000)]
+    public async Task SameInput_SameEmbedding()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -25,9 +29,11 @@ public abstract class SpeakerRecognitionTestBase : AudioNNModelTestBase
             Assert.Equal(emb1[i], emb2[i]);
     }
 
-    [Fact]
-    public void SpeakerEmbedding_ShouldBeBounded()
+    [Fact(Timeout = 60000)]
+    public async Task SpeakerEmbedding_ShouldBeBounded()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);

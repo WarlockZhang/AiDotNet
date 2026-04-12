@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -33,9 +35,11 @@ public abstract class CausalModelTestBase
         return (x, y);
     }
 
-    [Fact]
-    public void TreatmentEffect_ShouldBeFinite()
+    [Fact(Timeout = 60000)]
+    public async Task TreatmentEffect_ShouldBeFinite()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateCausalData(rng, 3.0);
@@ -49,9 +53,11 @@ public abstract class CausalModelTestBase
         }
     }
 
-    [Fact]
-    public void Predict_ShouldBeDeterministic()
+    [Fact(Timeout = 60000)]
+    public async Task Predict_ShouldBeDeterministic()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateCausalData(rng, 3.0);
@@ -62,9 +68,11 @@ public abstract class CausalModelTestBase
             Assert.Equal(pred1[i], pred2[i]);
     }
 
-    [Fact]
-    public void Clone_ShouldProduceSameEstimates()
+    [Fact(Timeout = 60000)]
+    public async Task Clone_ShouldProduceSameEstimates()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateCausalData(rng, 3.0);
@@ -76,9 +84,11 @@ public abstract class CausalModelTestBase
             Assert.Equal(pred1[i], pred2[i]);
     }
 
-    [Fact]
-    public void OutputDimension_ShouldMatchInputRows()
+    [Fact(Timeout = 60000)]
+    public async Task OutputDimension_ShouldMatchInputRows()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateCausalData(rng, 3.0);
@@ -86,9 +96,11 @@ public abstract class CausalModelTestBase
         Assert.Equal(TrainSamples, model.Predict(trainX).Length);
     }
 
-    [Fact]
-    public void Metadata_ShouldExistAfterTraining()
+    [Fact(Timeout = 60000)]
+    public async Task Metadata_ShouldExistAfterTraining()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateCausalData(rng, 3.0);
@@ -96,9 +108,11 @@ public abstract class CausalModelTestBase
         Assert.NotNull(model.GetModelMetadata());
     }
 
-    [Fact]
-    public void Parameters_ShouldBeNonEmpty()
+    [Fact(Timeout = 60000)]
+    public async Task Parameters_ShouldBeNonEmpty()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateCausalData(rng, 3.0);

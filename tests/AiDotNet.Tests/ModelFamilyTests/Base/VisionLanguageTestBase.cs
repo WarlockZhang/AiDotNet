@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -16,9 +18,11 @@ public abstract class VisionLanguageTestBase : NeuralNetworkModelTestBase
     // The model should produce finite output from image-only input.
     // =====================================================
 
-    [Fact]
-    public void ImageOnly_ShouldProduceOutput()
+    [Fact(Timeout = 120000)]
+    public async Task ImageOnly_ShouldProduceOutput()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -38,9 +42,11 @@ public abstract class VisionLanguageTestBase : NeuralNetworkModelTestBase
     // A model mapping everything to the same embedding is collapsed.
     // =====================================================
 
-    [Fact]
-    public void DifferentImages_DifferentEmbeddings()
+    [Fact(Timeout = 120000)]
+    public async Task DifferentImages_DifferentEmbeddings()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
 
         var img1 = CreateConstantTensor(InputShape, 0.1);
@@ -69,9 +75,11 @@ public abstract class VisionLanguageTestBase : NeuralNetworkModelTestBase
     // indicate numerical instability or unbounded growth.
     // =====================================================
 
-    [Fact]
-    public void OutputNorm_ShouldBeBounded()
+    [Fact(Timeout = 120000)]
+    public async Task OutputNorm_ShouldBeBounded()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input = CreateRandomTensor(InputShape, rng);
@@ -93,9 +101,11 @@ public abstract class VisionLanguageTestBase : NeuralNetworkModelTestBase
     // All-black image is a valid edge case.
     // =====================================================
 
-    [Fact]
-    public void ZeroImage_ShouldNotCrash()
+    [Fact(Timeout = 120000)]
+    public async Task ZeroImage_ShouldNotCrash()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var blackImage = CreateConstantTensor(InputShape, 0.0);
 

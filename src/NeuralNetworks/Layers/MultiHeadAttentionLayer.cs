@@ -418,16 +418,16 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         T scale = NumOps.Sqrt(NumOps.FromDouble(2.0 / (rows + cols)));
 
         _queryWeights = Engine.TensorMultiplyScalar(
-            new Tensor<T>(_queryWeights.Shape.ToArray(), Vector<T>.CreateRandom(rows * cols, -0.5, 0.5)),
+            new Tensor<T>(_queryWeights._shape, Vector<T>.CreateRandom(rows * cols, -0.5, 0.5)),
             scale);
         _keyWeights = Engine.TensorMultiplyScalar(
-            new Tensor<T>(_keyWeights.Shape.ToArray(), Vector<T>.CreateRandom(rows * cols, -0.5, 0.5)),
+            new Tensor<T>(_keyWeights._shape, Vector<T>.CreateRandom(rows * cols, -0.5, 0.5)),
             scale);
         _valueWeights = Engine.TensorMultiplyScalar(
-            new Tensor<T>(_valueWeights.Shape.ToArray(), Vector<T>.CreateRandom(rows * cols, -0.5, 0.5)),
+            new Tensor<T>(_valueWeights._shape, Vector<T>.CreateRandom(rows * cols, -0.5, 0.5)),
             scale);
         _outputWeights = Engine.TensorMultiplyScalar(
-            new Tensor<T>(_outputWeights.Shape.ToArray(), Vector<T>.CreateRandom(rows * cols, -0.5, 0.5)),
+            new Tensor<T>(_outputWeights._shape, Vector<T>.CreateRandom(rows * cols, -0.5, 0.5)),
             scale);
 
         // Initialize bias tensor to zeros
@@ -727,9 +727,9 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         if (was1D)
         {
             // Treat 1D [dim] as single token sequence [1, dim]
-            query = query.Reshape([1, query.Shape[0]]);
-            key = key.Reshape([1, key.Shape[0]]);
-            value = value.Reshape([1, value.Shape[0]]);
+            query = Engine.Reshape(query, [1, query.Shape[0]]);
+            key = Engine.Reshape(key, [1, key.Shape[0]]);
+            value = Engine.Reshape(value, [1, value.Shape[0]]);
         }
 
         // Flatten all batch dimensions to get 3D [batch, seq, dim]
@@ -755,9 +755,9 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         if (value.Rank == 2) batchV = 1;
 
         // Reshape to 3D for processing
-        query = query.Reshape(batchQ, seqLenQ, dimQ);
-        key = key.Reshape(batchK, seqLenK, dimK);
-        value = value.Reshape(batchV, seqLenV, dimV);
+        query = Engine.Reshape(query, [batchQ, seqLenQ, dimQ]);
+        key = Engine.Reshape(key, [batchK, seqLenK, dimK]);
+        value = Engine.Reshape(value, [batchV, seqLenV, dimV]);
 
         _lastInput = query;
         _lastQueryInput = query;
@@ -776,12 +776,12 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         {
             throw new ArgumentException(
                 $"Input embedding dimension ({embeddingDimension}) does not match weight dimension ({weightsEmbedDim}). " +
-                $"Query shape: [{string.Join(", ", query.Shape.ToArray())}], Weights shape: [{string.Join(", ", _queryWeights.Shape.ToArray())}]");
+                $"Query shape: [{string.Join(", ", query._shape)}], Weights shape: [{string.Join(", ", _queryWeights._shape)}]");
         }
 
-        var q2D = query.Reshape(batchSize * seqLengthQ, embeddingDimension);
-        var k2D = key.Reshape(batchSize * seqLengthKV, embeddingDimension);
-        var v2D = value.Reshape(batchSize * seqLengthKV, embeddingDimension);
+        var q2D = Engine.Reshape(query, [batchSize * seqLengthQ, embeddingDimension]);
+        var k2D = Engine.Reshape(key, [batchSize * seqLengthKV, embeddingDimension]);
+        var v2D = Engine.Reshape(value, [batchSize * seqLengthKV, embeddingDimension]);
 
         var Q_flat = Engine.TensorMatMul(q2D, _queryWeights);
         var K_flat = Engine.TensorMatMul(k2D, _keyWeights);
@@ -794,14 +794,20 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
             throw new ArgumentException(
                 $"Q_flat reshape mismatch: Q_flat has {Q_flat.Length} elements, " +
                 $"but target shape [{batchSize}, {seqLengthQ}, {_headCount}, {_headDimension}] needs {targetQElems}. " +
-                $"Q_flat shape: [{string.Join(", ", Q_flat.Shape.ToArray())}], " +
-                $"q2D shape: [{string.Join(", ", q2D.Shape.ToArray())}], " +
-                $"_queryWeights shape: [{string.Join(", ", _queryWeights.Shape.ToArray())}]");
+                $"Q_flat shape: [{string.Join(", ", Q_flat._shape)}], " +
+                $"q2D shape: [{string.Join(", ", q2D._shape)}], " +
+                $"_queryWeights shape: [{string.Join(", ", _queryWeights._shape)}]");
         }
 
-        var queries = Q_flat.Reshape(batchSize, seqLengthQ, _headCount, _headDimension).Transpose(new[] { 0, 2, 1, 3 });
-        var keys = K_flat.Reshape(batchSize, seqLengthKV, _headCount, _headDimension).Transpose(new[] { 0, 2, 1, 3 });
-        var values = V_flat.Reshape(batchSize, seqLengthKV, _headCount, _headDimension).Transpose(new[] { 0, 2, 1, 3 });
+        // Every shape op must go through Engine so the gradient tape records the
+        // transformation — direct Tensor<T>.Transpose bypasses the tape and breaks
+        // gradient flow through Q/K/V projections and back to the weight tensors.
+        var queriesReshaped = Engine.Reshape(Q_flat, [batchSize, seqLengthQ, _headCount, _headDimension]);
+        var keysReshaped = Engine.Reshape(K_flat, [batchSize, seqLengthKV, _headCount, _headDimension]);
+        var valuesReshaped = Engine.Reshape(V_flat, [batchSize, seqLengthKV, _headCount, _headDimension]);
+        var queries = Engine.TensorPermute(queriesReshaped, new[] { 0, 2, 1, 3 });
+        var keys = Engine.TensorPermute(keysReshaped, new[] { 0, 2, 1, 3 });
+        var values = Engine.TensorPermute(valuesReshaped, new[] { 0, 2, 1, 3 });
 
         // Apply RoPE to Q and K if configured
         if (_ropeLayer != null)
@@ -845,22 +851,22 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         // Cache attention weights for backward pass
         _lastAttentionScores = attentionWeights4D;
 
-        // 3. Cache Head Outputs
-        var permutedForCache = context_4D.Transpose(new[] { 1, 0, 2, 3 }); // [H, B, S, D]
+        // 3. Cache Head Outputs — via Engine so the tape records the transpose.
+        var permutedForCache = Engine.TensorPermute(context_4D, new[] { 1, 0, 2, 3 }); // [H, B, S, D]
         _lastHeadOutputs = new List<Tensor<T>> { permutedForCache }; // store stacked heads
 
         // 5. Concatenate and Project Output
-        // [B, H, S, D] -> [B, S, H, D] -> [B, S, E]
-        var context_transposed = context_4D.Transpose(new[] { 0, 2, 1, 3 });
-        var context_flat = context_transposed.Reshape(batchSize * seqLengthQ, embeddingDimension);
+        // [B, H, S, D] -> [B, S, H, D] -> [B, S, E] (Engine op keeps tape connected)
+        var context_transposed = Engine.TensorPermute(context_4D, new[] { 0, 2, 1, 3 });
+        var context_flat = Engine.Reshape(context_transposed, [batchSize * seqLengthQ, embeddingDimension]);
 
         // Cache pre-projection context for weight gradient computation in backward pass
-        _lastAttentionContext = context_transposed.Reshape(batchSize, seqLengthQ, embeddingDimension);
+        _lastAttentionContext = Engine.Reshape(context_transposed, [batchSize, seqLengthQ, embeddingDimension]);
 
         var output_flat = Engine.TensorMatMul(context_flat, _outputWeights);
-        var output_reshaped = output_flat.Reshape(batchSize, seqLengthQ, embeddingDimension);
+        var output_reshaped = Engine.Reshape(output_flat, [batchSize, seqLengthQ, embeddingDimension]);
 
-        var biasBroadcast = _outputBias.Reshape(1, 1, embeddingDimension);
+        var biasBroadcast = Engine.Reshape(_outputBias, [1, 1, embeddingDimension]);
         var outputWithBias = Engine.TensorBroadcastAdd(output_reshaped, biasBroadcast);
         var result = ApplyActivation(outputWithBias);
 
@@ -876,7 +882,7 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         if (_originalQueryShape.Length == 1)
         {
             // 1D input -> 1D output [dim]
-            return result.Reshape([embeddingDimension]);
+            return Engine.Reshape(result, [embeddingDimension]);
         }
 
         int[] outputShape = new int[_originalQueryShape.Length];
@@ -887,7 +893,7 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         outputShape[^2] = seqLengthQ;
         outputShape[^1] = embeddingDimension;
 
-        return result.Reshape(outputShape);
+        return Engine.Reshape(result, outputShape);
     }
 
 
@@ -1118,12 +1124,13 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
     /// </remarks>
     public override Vector<T> GetParameters()
     {
+        // Bulk copy from contiguous tensor storage — avoids ToArray() double-copy
         return Vector<T>.Concatenate(
-            new Vector<T>(_queryWeights.ToArray()),
-            new Vector<T>(_keyWeights.ToArray()),
-            new Vector<T>(_valueWeights.ToArray()),
-            new Vector<T>(_outputWeights.ToArray()),
-            new Vector<T>(_outputBias.ToArray()));
+            Vector<T>.FromMemory(_queryWeights.Data),
+            Vector<T>.FromMemory(_keyWeights.Data),
+            Vector<T>.FromMemory(_valueWeights.Data),
+            Vector<T>.FromMemory(_outputWeights.Data),
+            Vector<T>.FromMemory(_outputBias.Data));
     }
 
     /// <summary>
@@ -1155,28 +1162,19 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
             throw new ArgumentException($"Expected {totalParams} parameters, but got {parameters.Length}");
         }
 
-        int index = 0;
-
         var qLen = qRows * qCols;
         var kLen = kRows * kCols;
         var vLen = vRows * vCols;
         var oLen = oRows * oCols;
 
-        // Write in-place to preserve engine persistent tensor references
-        var qSpan = _queryWeights.Data.Span;
-        for (int i = 0; i < qLen; i++) qSpan[i] = parameters[index++];
-
-        var kSpan = _keyWeights.Data.Span;
-        for (int i = 0; i < kLen; i++) kSpan[i] = parameters[index++];
-
-        var vSpan = _valueWeights.Data.Span;
-        for (int i = 0; i < vLen; i++) vSpan[i] = parameters[index++];
-
-        var oSpan = _outputWeights.Data.Span;
-        for (int i = 0; i < oLen; i++) oSpan[i] = parameters[index++];
-
-        var bSpan = _outputBias.Data.Span;
-        for (int i = 0; i < biasLen; i++) bSpan[i] = parameters[index++];
+        // Bulk copy in-place — preserves engine persistent tensor references
+        var src = parameters.AsSpan();
+        int idx = 0;
+        src.Slice(idx, qLen).CopyTo(_queryWeights.Data.Span); idx += qLen;
+        src.Slice(idx, kLen).CopyTo(_keyWeights.Data.Span); idx += kLen;
+        src.Slice(idx, vLen).CopyTo(_valueWeights.Data.Span); idx += vLen;
+        src.Slice(idx, oLen).CopyTo(_outputWeights.Data.Span); idx += oLen;
+        src.Slice(idx, biasLen).CopyTo(_outputBias.Data.Span);
 
         // Notify GPU that tensor data has changed
         Engine.InvalidatePersistentTensor(_queryWeights);
@@ -1211,12 +1209,13 @@ public partial class MultiHeadAttentionLayer<T> : LayerBase<T>, IAuxiliaryLossLa
     {
         if (_queryWeightsGradient == null || _keyWeightsGradient == null || _valueWeightsGradient == null)
             return new Vector<T>(ParameterCount);
+        // Bulk copy from contiguous tensor storage — avoids ToArray() double-copy
         return Vector<T>.Concatenate(
-            new Vector<T>(_queryWeightsGradient.ToArray()),
-            new Vector<T>(_keyWeightsGradient.ToArray()),
-            new Vector<T>(_valueWeightsGradient.ToArray()),
-            new Vector<T>(_outputWeightsGradient?.ToArray() ?? new T[_outputWeights.Length]),
-            new Vector<T>(_outputBiasGradient?.ToArray() ?? new T[_outputBias.Length]));
+            Vector<T>.FromMemory(_queryWeightsGradient.Data),
+            Vector<T>.FromMemory(_keyWeightsGradient.Data),
+            Vector<T>.FromMemory(_valueWeightsGradient.Data),
+            _outputWeightsGradient != null ? Vector<T>.FromMemory(_outputWeightsGradient.Data) : new Vector<T>(_outputWeights.Length),
+            _outputBiasGradient != null ? Vector<T>.FromMemory(_outputBiasGradient.Data) : new Vector<T>(_outputBias.Length));
     }
 
     public override void ClearGradients()

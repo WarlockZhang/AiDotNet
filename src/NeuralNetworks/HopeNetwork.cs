@@ -160,9 +160,12 @@ public class HopeNetwork<T> : NeuralNetworkBase<T>
         {
             current = ApplySelfModification(current, _metaState);
 
-            // Store current state in associative memory (backprop as memory)
-            var inputVec = current.ToVector();
-            _associativeMemory.Associate(inputVec, inputVec); // Self-association
+            // Only mutate memory during training — inference must be deterministic
+            if (IsTrainingMode)
+            {
+                var inputVec = current.ToVector();
+                _associativeMemory.Associate(inputVec, inputVec);
+            }
         }
 
         // Process through sequential CMS chains (Equation 30 from paper)
@@ -193,16 +196,18 @@ public class HopeNetwork<T> : NeuralNetworkBase<T>
             current = recurrentLayer.Forward(current);
         }
 
-        // Update meta-state through self-referential process
-        UpdateMetaStateSelfReferential(current);
+        // Only mutate meta-state during training
+        if (IsTrainingMode)
+        {
+            UpdateMetaStateSelfReferential(current);
+            _adaptationStep++;
+        }
 
         // Apply output layer if present
         if (_outputLayer != null)
         {
             current = _outputLayer.Forward(current);
         }
-
-        _adaptationStep++;
 
         return current;
     }
@@ -394,11 +399,31 @@ public class HopeNetwork<T> : NeuralNetworkBase<T>
         if (input == null)
             throw new ArgumentNullException(nameof(input));
 
-        // Reset layer state for deterministic inference
-        foreach (var layer in Layers)
-            layer.ResetState();
+        // Save prior network mode so Predict() can be called during training without side effects.
+        bool previousMode = IsTrainingMode;
 
-        return Forward(input);
+        try
+        {
+            // Set network + layer eval mode for deterministic inference.
+            // Don't zero _metaState — Forward no longer mutates it in eval mode,
+            // and zeroing would destroy learned self-modification state.
+            SetTrainingMode(false);
+            _contextFlow.Reset();
+            foreach (var layer in Layers)
+            {
+                layer.ResetState();
+                layer.SetTrainingMode(false);
+            }
+
+            return Forward(input);
+        }
+        finally
+        {
+            // Restore prior training/eval mode for network and all layers
+            SetTrainingMode(previousMode);
+            foreach (var layer in Layers)
+                layer.SetTrainingMode(previousMode);
+        }
     }
 
     /// <summary>
@@ -466,15 +491,27 @@ public class HopeNetwork<T> : NeuralNetworkBase<T>
         foreach (var layer in Layers)
             layer.SetTrainingMode(true);
 
-        TrainWithTape(input, expectedOutput, _optimizer);
-
-        // Periodically consolidate memory
-        if (_adaptationStep % 100 == 0)
+        try
         {
-            ConsolidateMemory();
+            TrainWithTape(input, expectedOutput, _optimizer);
         }
+        finally
+        {
+            // Restore eval mode — set both network and layer flags
+            // NeuralNetworkBase.SetTrainingMode does not propagate to layers
+            SetTrainingMode(false);
+            if (Layers != null)
+            {
+                foreach (var layer in Layers)
+                    layer.SetTrainingMode(false);
+            }
 
-        SetTrainingMode(false);
+            // Consolidate memory periodically — safe in eval mode
+            if (_adaptationStep % 100 == 0)
+            {
+                ConsolidateMemory();
+            }
+        }
     }
 
     /// <summary>

@@ -606,7 +606,7 @@ public partial class HighwayLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
             // Apply default tanh
             var tanhBuffer = backend.AllocateBuffer(size);
             backend.Tanh(transformPreActivation.Buffer, tanhBuffer, size);
-            transformOutput = GpuTensorHelper.UploadToGpu<T>(backend, tanhBuffer, input.Shape.ToArray(), GpuTensorRole.Activation, ownsBuffer: true);
+            transformOutput = GpuTensorHelper.UploadToGpu<T>(backend, tanhBuffer, input._shape, GpuTensorRole.Activation, ownsBuffer: true);
         }
 
         // Gate path: gateLinear = input @ gateWeights + gateBias
@@ -629,7 +629,7 @@ public partial class HighwayLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
             // Apply default sigmoid
             var sigmoidBuffer = backend.AllocateBuffer(size);
             backend.Sigmoid(gatePreActivation.Buffer, sigmoidBuffer, size);
-            gateOutput = GpuTensorHelper.UploadToGpu<T>(backend, sigmoidBuffer, input.Shape.ToArray(), GpuTensorRole.Activation, ownsBuffer: true);
+            gateOutput = GpuTensorHelper.UploadToGpu<T>(backend, sigmoidBuffer, input._shape, GpuTensorRole.Activation, ownsBuffer: true);
         }
 
         // Highway output: output = gate * (transform - input) + input
@@ -668,7 +668,7 @@ public partial class HighwayLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
             _lastGatePreActivation = gatePreActivation;
         }
 
-        return GpuTensorHelper.UploadToGpu<T>(backend, outputBuffer, input.Shape.ToArray(), GpuTensorRole.Activation, ownsBuffer: true);
+        return GpuTensorHelper.UploadToGpu<T>(backend, outputBuffer, input._shape, GpuTensorRole.Activation, ownsBuffer: true);
     }
 
     /// <summary>
@@ -871,16 +871,16 @@ public partial class HighwayLayer<T> : LayerBase<T>, IAuxiliaryLossLayer<T>
 
         int index = 0;
 
-        _transformWeights = new Tensor<T>(_transformWeights.Shape.ToArray(), parameters.Slice(index, transformWeightsSize));
+        _transformWeights = new Tensor<T>(_transformWeights._shape, parameters.Slice(index, transformWeightsSize));
         index += transformWeightsSize;
 
-        _transformBias = new Tensor<T>(_transformBias.Shape.ToArray(), parameters.Slice(index, _transformBias.Length));
+        _transformBias = new Tensor<T>(_transformBias._shape, parameters.Slice(index, _transformBias.Length));
         index += _transformBias.Length;
 
-        _gateWeights = new Tensor<T>(_gateWeights.Shape.ToArray(), parameters.Slice(index, gateWeightsSize));
+        _gateWeights = new Tensor<T>(_gateWeights._shape, parameters.Slice(index, gateWeightsSize));
         index += gateWeightsSize;
 
-        _gateBias = new Tensor<T>(_gateBias.Shape.ToArray(), parameters.Slice(index, _gateBias.Length));
+        _gateBias = new Tensor<T>(_gateBias._shape, parameters.Slice(index, _gateBias.Length));
 
         // Notify engine that parameters have changed (for GPU cache invalidation)
         Engine.InvalidatePersistentTensor(_transformWeights);

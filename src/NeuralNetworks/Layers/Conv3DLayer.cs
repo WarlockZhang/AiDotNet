@@ -438,7 +438,7 @@ public partial class Conv3DLayer<T> : LayerBase<T>
             NumOps.FromDouble(fanIn)));
 
         // Initialize kernels in [-scale, scale] range
-        _kernels = Engine.TensorRandomUniformRange<T>(_kernels.Shape.ToArray(), NumOps.Negate(scale), scale);
+        _kernels = Engine.TensorRandomUniformRange<T>(_kernels._shape, NumOps.Negate(scale), scale);
 
         // Initialize biases to zero
         _biases = new Tensor<T>(_biases._shape);
@@ -483,7 +483,7 @@ public partial class Conv3DLayer<T> : LayerBase<T>
         }
         else if (input.Rank == 4)
         {
-            batchedInput = input.Reshape(1, input.Shape[0], input.Shape[1], input.Shape[2], input.Shape[3]);
+            batchedInput = Engine.Reshape(input, new[] { 1, input.Shape[0], input.Shape[1], input.Shape[2], input.Shape[3] });
         }
         else if (input.Rank >= 6)
         {
@@ -491,7 +491,7 @@ public partial class Conv3DLayer<T> : LayerBase<T>
             int flatBatch = 1;
             for (int d = 0; d < input.Rank - 4; d++)
                 flatBatch *= input.Shape[d];
-            batchedInput = input.Reshape(flatBatch, input.Shape[input.Rank - 4], input.Shape[input.Rank - 3], input.Shape[input.Rank - 2], input.Shape[input.Rank - 1]);
+            batchedInput = Engine.Reshape(input, new[] { flatBatch, input.Shape[input.Rank - 4], input.Shape[input.Rank - 3], input.Shape[input.Rank - 2], input.Shape[input.Rank - 1] });
         }
         else
         {
@@ -545,12 +545,12 @@ public partial class Conv3DLayer<T> : LayerBase<T>
             outputShape[_originalInputShape.Length - 3] = activated.Shape[2]; // OutD
             outputShape[_originalInputShape.Length - 2] = activated.Shape[3]; // OutH
             outputShape[_originalInputShape.Length - 1] = activated.Shape[4]; // OutW
-            return activated.Reshape(outputShape);
+            return Engine.Reshape(activated, outputShape);
         }
         if (_originalInputShape != null && _originalInputShape.Length == 4)
         {
             // Input was 4D [C,D,H,W], remove batch dim
-            return activated.Reshape(activated.Shape[1], activated.Shape[2], activated.Shape[3], activated.Shape[4]);
+            return Engine.Reshape(activated, new[] { activated.Shape[1], activated.Shape[2], activated.Shape[3], activated.Shape[4] });
         }
 
         return activated;
@@ -663,7 +663,7 @@ public partial class Conv3DLayer<T> : LayerBase<T>
         int height = convOutput.Shape[3];
         int width = convOutput.Shape[4];
 
-        var biasExpanded = _biases.Reshape(1, channels, 1, 1, 1);
+        var biasExpanded = Engine.Reshape(_biases, new[] { 1, channels, 1, 1, 1 });
         return Engine.TensorBroadcastAdd(convOutput, biasExpanded);
     }
 
@@ -739,9 +739,9 @@ public partial class Conv3DLayer<T> : LayerBase<T>
             throw new ArgumentException($"Expected {expected} parameters, but got {parameters.Length}");
 
         int index = 0;
-        _kernels = new Tensor<T>(_kernels.Shape.ToArray(), parameters.Slice(index, _kernels.Length));
+        _kernels = new Tensor<T>(_kernels._shape, parameters.Slice(index, _kernels.Length));
         index += _kernels.Length;
-        _biases = new Tensor<T>(_biases.Shape.ToArray(), parameters.Slice(index, _biases.Length));
+        _biases = new Tensor<T>(_biases._shape, parameters.Slice(index, _biases.Length));
 
         // Invalidate GPU cache after parameter update
         Engine.InvalidatePersistentTensor(_kernels);
@@ -901,7 +901,7 @@ public partial class Conv3DLayer<T> : LayerBase<T>
         {
             kernelArray[i] = NumOps.FromDouble(reader.ReadDouble());
         }
-        _kernels = new Tensor<T>(kernelArray, _kernels.Shape.ToArray());
+        _kernels = new Tensor<T>(kernelArray, _kernels._shape);
 
         _biases = new Tensor<T>([OutputChannels]);
         var biasArray = new T[_biases.Length];
@@ -909,7 +909,7 @@ public partial class Conv3DLayer<T> : LayerBase<T>
         {
             biasArray[i] = NumOps.FromDouble(reader.ReadDouble());
         }
-        _biases = new Tensor<T>(biasArray, _biases.Shape.ToArray());
+        _biases = new Tensor<T>(biasArray, _biases._shape);
     }
 
     #endregion

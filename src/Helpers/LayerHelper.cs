@@ -4618,20 +4618,13 @@ public static class LayerHelper<T>
         // Flatten
         yield return new FlattenLayer<T>([currentChannels, 1, 1]);
 
-        // Classification head per Huang et al. 2017: Dense + activation
-        // Use Sigmoid for single-class (binary) since Softmax([1]) is always 1
+        // Classification head per Huang et al. 2017: Dense layer outputs raw logits.
+        // Softmax/Sigmoid is NOT applied here — it's handled by the loss function
+        // (CrossEntropyLoss = LogSoftmax + NLLLoss). Applying Softmax in the model
+        // causes double-softmax when paired with CrossEntropy, and makes the output
+        // scale-invariant (destroying input sensitivity for testing).
         yield return new DenseLayer<T>(currentChannels, configuration.NumClasses,
             activationFunction: new IdentityActivation<T>());
-        if (configuration.NumClasses > 1)
-        {
-            yield return new ActivationLayer<T>([configuration.NumClasses],
-                activationFunction: new SoftmaxActivation<T>());
-        }
-        else
-        {
-            yield return new ActivationLayer<T>([1],
-                activationFunction: new SigmoidActivation<T>());
-        }
     }
 
     /// <summary>
@@ -5397,7 +5390,7 @@ public static class LayerHelper<T>
         int textHiddenDim = 768,
         int lmHiddenDim = 1536,
         int numLmLayers = 24,
-        int numHeads = 16,
+        int numHeads = 12,
         int numCodebooks = 4,
         int codebookSize = 1024,
         int maxTextLength = 256,
@@ -5521,7 +5514,7 @@ public static class LayerHelper<T>
         int textHiddenDim = 768,
         int lmHiddenDim = 1536,
         int numLmLayers = 24,
-        int numHeads = 16,
+        int numHeads = 12,
         int numCodebooks = 4,
         int codebookSize = 2048,
         int maxTextLength = 256,
@@ -5882,7 +5875,7 @@ public static class LayerHelper<T>
         int latentDim = 64,
         int ditHiddenDim = 1024,
         int numDitBlocks = 24,
-        int numHeads = 16,
+        int numHeads = 12,
         int maxTextLength = 512,
         int maxAudioLength = 2048,
         double dropoutRate = 0.1)
@@ -10025,7 +10018,7 @@ public static class LayerHelper<T>
         int hiddenDim = 1024,
         int numEncoderLayers = 18,
         int numDecoderLayers = 18,
-        int numHeads = 16,
+        int numHeads = 12,
         int vocabSize = 50000,
         int patchSize = 16,
         int maxPatches = 4096,
@@ -10107,7 +10100,7 @@ public static class LayerHelper<T>
         int hiddenDim = 1024,
         int numEncoderLayers = 12,
         int numDecoderLayers = 10,
-        int numHeads = 16,
+        int numHeads = 12,
         int vocabSize = 50000,
         int imageSize = 896,
         int patchSize = 16,
@@ -10188,7 +10181,7 @@ public static class LayerHelper<T>
         int hiddenDim = 1024,
         int numEncoderLayers = 12,
         int numDecoderLayers = 12,
-        int numHeads = 16,
+        int numHeads = 12,
         int vocabSize = 50000,
         int imageSize = 224,
         int maxSequenceLength = 2048)
@@ -10748,7 +10741,7 @@ public static class LayerHelper<T>
         int textDim = 4096,
         int visionLayers = 24,
         int textLayers = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         int vocabSize = 32000)
     {
         IActivationFunction<T> siluActivation = new SiLUActivation<T>();
@@ -11361,8 +11354,9 @@ public static class LayerHelper<T>
             yield return new TransformerEncoderLayer<T>(embeddingDimension, numHeads, feedForwardDim);
         }
 
-        // 4. MLM Head (Optional, but often used in SimCSE training)
-        yield return new DenseLayer<T>(embeddingDimension, vocabSize, (IActivationFunction<T>?)null);
+        // Per Gao et al. (2021), SimCSE outputs [CLS] token embeddings (768-dim),
+        // NOT vocabulary logits. The MLM head is not part of the inference architecture.
+        // Output dimension = embeddingDimension (768 for BERT-base).
     }
 
     /// <summary>
@@ -14748,7 +14742,7 @@ public static class LayerHelper<T>
         int numFeatures = 1,
         int hiddenDim = 1024,
         int numLayers = 24,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropout = 0.0)
     {
         int flattenedInputSize = contextLength * numFeatures;
@@ -19639,7 +19633,7 @@ public static class LayerHelper<T>
         int latentChannels = 4,
         int hiddenSize = 1152,
         int numLayers = 28,
-        int numHeads = 16,
+        int numHeads = 12,
         int patchSize = 2)
     {
         var identity = new IdentityActivation<T>() as IActivationFunction<T>;
@@ -21495,7 +21489,7 @@ public static class LayerHelper<T>
     /// <summary>Creates default layers for VoiceCraft codec language model.</summary>
     public static IEnumerable<ILayer<T>> CreateDefaultVoiceCraftLayers(
         int hiddenDim = 2048, int numLayers = 16,
-        int numHeads = 16, int codebookSize = 2048,
+        int numHeads = 12, int codebookSize = 2048,
         double dropoutRate = 0.1)
     {
         var geluActivation = (IActivationFunction<T>)new GELUActivation<T>();
@@ -23611,7 +23605,7 @@ public static class LayerHelper<T>
         int numVisionLayers = 6,
         int numTextLayers = 12,
         int numFusionLayers = 6,
-        int numHeads = 12,
+        int numHeads = 16,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -23889,7 +23883,7 @@ public static class LayerHelper<T>
         int numQFormerLayers = 12,
         int numDecoderLayers = 6,
         int numQueryTokens = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         int numQFormerHeads = 12,
         double dropoutRate = 0.1)
     {
@@ -24018,7 +24012,7 @@ public static class LayerHelper<T>
         int numPerceiverLayers = 6,
         int numDecoderLayers = 32,
         int numLatents = 64,
-        int numHeads = 16,
+        int numHeads = 12,
         int numPerceiverHeads = 16,
         double dropoutRate = 0.1)
     {
@@ -24266,7 +24260,7 @@ public static class LayerHelper<T>
         int decoderDim = 4096,
         int numVisionLayers = 24,
         int numDecoderLayers = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -24315,7 +24309,7 @@ public static class LayerHelper<T>
         int decoderDim = 4096,
         int numVisionLayers = 24,
         int numDecoderLayers = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -24368,7 +24362,7 @@ public static class LayerHelper<T>
         int numVisionLayers = 24,
         int numResamplerLayers = 4,
         int numDecoderLayers = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -24468,7 +24462,7 @@ public static class LayerHelper<T>
         int decoderDim = 4096,
         int numVisionLayers = 24,
         int numDecoderLayers = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -24521,7 +24515,7 @@ public static class LayerHelper<T>
         int decoderDim = 4096,
         int numVisionLayers = 24,
         int numDecoderLayers = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -24574,7 +24568,7 @@ public static class LayerHelper<T>
         int numVisionLayers = 24,
         int numTemporalLayers = 2,
         int numDecoderLayers = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -24639,7 +24633,7 @@ public static class LayerHelper<T>
         int numVisionLayers = 24,
         int numDecoderLayers = 32,
         int numActionLayers = 2,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -24691,7 +24685,7 @@ public static class LayerHelper<T>
         int decoderDim = 4096,
         int numEncoderLayers = 6,
         int numDecoderLayers = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -24743,7 +24737,7 @@ public static class LayerHelper<T>
         int numVisionLayers = 24,
         int numFusionLayers = 6,
         int numDetectionLayers = 6,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -24870,7 +24864,7 @@ public static class LayerHelper<T>
         int numEncoderLayers = 24,
         int numUnderstandingLayers = 12,
         int numGenerationLayers = 12,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -24937,7 +24931,7 @@ public static class LayerHelper<T>
         int editingDim = 1024,
         int numVisionLayers = 24,
         int numEditingLayers = 8,
-        int numHeads = 16,
+        int numHeads = 12,
         double dropoutRate = 0.1)
     {
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
@@ -29551,7 +29545,7 @@ public static class LayerHelper<T>
         int inputChannels = 4,
         int hiddenSize = 1152,
         int numLayers = 28,
-        int numHeads = 16,
+        int numHeads = 12,
         int patchSize = 2,
         int contextDim = 1024,
         double mlpRatio = 4.0)
@@ -31029,7 +31023,7 @@ public static class LayerHelper<T>
         int lmHiddenDim = 4096,
         int numVisionLayers = 24,
         int numLmLayers = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         int vocabularySize = 32000,
         int maxSequenceLength = 2048)
     {
@@ -31253,21 +31247,35 @@ public static class LayerHelper<T>
     {
         IActivationFunction<T>? nullActivation = null;
         var tanhActivation = (IActivationFunction<T>)new TanhActivation<T>();
+        int sequenceLength = 32;
+        int numHeads = 8;
 
-        // Audio feature encoder (paper: VGG features -> LSTM -> 256-D)
+        // Audio encoder: input projection + N attention layers + output projection
         yield return new DenseLayer<T>(inputSize, embeddingDimension, tanhActivation);
+        for (int i = 0; i < numEncoderLayers; i++)
+            yield return new MultiHeadAttentionLayer<T>(sequenceLength, embeddingDimension, numHeads);
         yield return new DenseLayer<T>(embeddingDimension, embeddingDimension, tanhActivation);
 
-        // Visual feature encoder (paper: VGG features -> attention -> LSTM -> 256-D)
-        yield return new DenseLayer<T>(embeddingDimension, embeddingDimension, tanhActivation);
-        yield return new DenseLayer<T>(embeddingDimension, embeddingDimension, tanhActivation);
-
-        // DMRN fusion (paper: dual multimodal residual network)
-        yield return new DenseLayer<T>(embeddingDimension, embeddingDimension, tanhActivation);
+        // Visual encoder: input projection + N attention layers + output projection
+        yield return new DenseLayer<T>(inputSize, embeddingDimension, tanhActivation);
+        for (int i = 0; i < numEncoderLayers; i++)
+            yield return new MultiHeadAttentionLayer<T>(sequenceLength, embeddingDimension, numHeads);
         yield return new DenseLayer<T>(embeddingDimension, embeddingDimension, tanhActivation);
 
-        // Event classification output (paper: FC -> softmax over categories + binary event)
+        // Temporal modeling: 4 attention layers + proposal head
+        for (int i = 0; i < 4; i++)
+            yield return new MultiHeadAttentionLayer<T>(sequenceLength, embeddingDimension, numHeads);
+        yield return new DenseLayer<T>(embeddingDimension, embeddingDimension, tanhActivation);
+
+        // Cross-modal fusion: 4 attention layers
+        for (int i = 0; i < 4; i++)
+            yield return new MultiHeadAttentionLayer<T>(sequenceLength, embeddingDimension, numHeads);
+
+        // Task-specific heads: event classification, temporal boundary, spatial localization, anomaly
         yield return new DenseLayer<T>(embeddingDimension, numCategories, nullActivation);
+        yield return new DenseLayer<T>(embeddingDimension, 2, nullActivation);
+        yield return new DenseLayer<T>(embeddingDimension, 4, nullActivation);
+        yield return new DenseLayer<T>(embeddingDimension, 1, nullActivation);
     }
 
     /// <summary>
@@ -31782,7 +31790,7 @@ public static class LayerHelper<T>
         int numPerceiverLayers = 6,
         int numPerceiverTokens = 64,
         int numLmLayers = 24,
-        int numHeads = 16,
+        int numHeads = 12,
         int vocabularySize = 32000,
         int maxSequenceLength = 2048)
     {
@@ -31833,7 +31841,7 @@ public static class LayerHelper<T>
         int hiddenDim = 4096,
         int numVisionLayers = 24,
         int numLanguageLayers = 32,
-        int numHeads = 16,
+        int numHeads = 12,
         int vocabularySize = 100256)
     {
         int ffnDim = hiddenDim * 4;
@@ -32695,24 +32703,29 @@ public static class LayerHelper<T>
         int numResidualLayers = 20,
         double dropoutRate = 0.0)
     {
-        IActivationFunction<T> geluActivation = new GELUActivation<T>();
+        // Per Kalchbrenner et al. 2018 "Efficient Neural Audio Synthesis" and
+        // the fatchord/WaveRNN reference implementation:
+        // Architecture: MelConditioning → GRU1 → GRU2 → FC1 → FC2 → FC3(output)
+
+        IActivationFunction<T> reluActivation = new ReLUActivation<T>();
         IActivationFunction<T> identityActivation = new IdentityActivation<T>();
-        IActivationFunction<T> tanhActivation = new TanhActivation<T>();
 
-        // === Mel conditioning ===
-        yield return new DenseLayer<T>(melChannels, hiddenDim, geluActivation);
-        yield return new LayerNormalizationLayer<T>(hiddenDim);
+        // === Mel conditioning: project mel features to hidden dim ===
+        yield return new DenseLayer<T>(melChannels, hiddenDim, reluActivation);
 
-        // === Causal residual blocks (simulating dilated causal convolutions) ===
-        for (int i = 0; i < numResidualLayers; i++)
-        {
-            yield return new DenseLayer<T>(hiddenDim, hiddenDim, tanhActivation);
-            yield return new LayerNormalizationLayer<T>(hiddenDim);
-            if (dropoutRate > 0) yield return new DropoutLayer<T>(dropoutRate);
-        }
+        // === GRU layers (paper: 2 stacked GRUs with residual connections) ===
+        // Paper uses single large GRU (896 units); we use hiddenDim with 2 layers
+        yield return new GRULayer<T>(hiddenDim, hiddenDim, false, (IActivationFunction<T>?)null);
+        yield return new GRULayer<T>(hiddenDim, hiddenDim, false, (IActivationFunction<T>?)null);
 
-        // === Output: dual softmax (WaveRNN) or mu-law (WaveNet) ===
-        yield return new DenseLayer<T>(hiddenDim, hiddenDim, geluActivation);
+        // === Output FC chain (paper: fc1 → fc2 → fc3) ===
+        // fc1: hiddenDim → hiddenDim with ReLU
+        yield return new DenseLayer<T>(hiddenDim, hiddenDim, reluActivation);
+        if (dropoutRate > 0) yield return new DropoutLayer<T>(dropoutRate);
+        // fc2: hiddenDim → hiddenDim with ReLU
+        yield return new DenseLayer<T>(hiddenDim, hiddenDim, reluActivation);
+        if (dropoutRate > 0) yield return new DropoutLayer<T>(dropoutRate);
+        // fc3: hiddenDim → output (1 for waveform sample)
         yield return new DenseLayer<T>(hiddenDim, 1, identityActivation);
     }
 
@@ -33310,7 +33323,7 @@ public static class LayerHelper<T>
         int patchLength = 64,
         int hiddenDim = 1024,
         int numLayers = 24,
-        int numHeads = 16,
+        int numHeads = 12,
         int intermediateSize = 4096,
         double dropout = 0.1,
         int? numClasses = null)
@@ -33531,7 +33544,7 @@ public static class LayerHelper<T>
     public static IEnumerable<ILayer<T>> CreateDefaultSundialLayers(
         NeuralNetworkArchitecture<T> architecture,
         int contextLength = 2048, int forecastHorizon = 96, int patchLength = 32,
-        int hiddenDim = 1024, int numLayers = 24, int numHeads = 16,
+        int hiddenDim = 1024, int numLayers = 24, int numHeads = 12,
         int intermediateSize = 4096, double dropout = 0.1)
     {
         if (contextLength < 1) throw new ArgumentOutOfRangeException(nameof(contextLength));
@@ -33567,7 +33580,7 @@ public static class LayerHelper<T>
     public static IEnumerable<ILayer<T>> CreateDefaultTimeMoELayers(
         NeuralNetworkArchitecture<T> architecture,
         int contextLength = 2048, int forecastHorizon = 96, int patchLength = 32,
-        int hiddenDim = 1024, int numLayers = 24, int numHeads = 16,
+        int hiddenDim = 1024, int numLayers = 24, int numHeads = 12,
         int intermediateSize = 4096, int numExperts = 8, double dropout = 0.1)
     {
         if (contextLength < 1) throw new ArgumentOutOfRangeException(nameof(contextLength));

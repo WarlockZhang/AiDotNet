@@ -47,9 +47,13 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
 
     private Tensor<T> _weights;
 
+    /// <summary>Cached W^T — invalidated when weights change.</summary>
+    private Tensor<T>? _weightsTCache;
+
     /// <summary>
-    /// Bias values as points on the Poincare ball.
-    /// Shape: [OutputFeatures, InputFeatures] - each row is a bias point.
+    /// Scalar bias per output feature — added to the Poincaré ball coordinates
+    /// after Möbius matrix-vector multiplication.
+    /// Shape: [OutputFeatures].
     /// </summary>
     [TrainableParameter(Role = PersistentTensorRole.Biases)]
 
@@ -100,7 +104,7 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
     /// Gets the total number of trainable parameters.
     /// </summary>
     public override int ParameterCount =>
-        (OutputFeatures * InputFeatures) + (OutputFeatures * InputFeatures);
+        (OutputFeatures * InputFeatures) + OutputFeatures;
 
     /// <summary>
     /// Gets whether this layer supports training.
@@ -140,7 +144,7 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
         _curvature = NumOps.FromDouble(curvature);
 
         _weights = new Tensor<T>([outputFeatures, inputFeatures]);
-        _biases = new Tensor<T>([outputFeatures, inputFeatures]);
+        _biases = new Tensor<T>([outputFeatures]);
 
         InitializeParameters();
 
@@ -163,9 +167,9 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
             {
                 // Initialize weights in tangent space (small values)
                 _weights[o, i] = NumOps.FromDouble((random.NextDouble() - 0.5) * 2 * scale * 0.1);
-                // Initialize biases close to origin (small values for Poincare ball)
-                _biases[o, i] = NumOps.FromDouble((random.NextDouble() - 0.5) * 2 * 0.01);
             }
+            // Scalar bias per output — added to ball coordinates after Möbius matmul
+            _biases[o] = NumOps.FromDouble((random.NextDouble() - 0.5) * 2 * 0.01);
         }
     }
 
@@ -186,7 +190,7 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
         {
             batchSize = 1;
             inputLen = input.Shape[0];
-            inputTensor = input.Reshape([1, inputLen]);
+            inputTensor = Engine.Reshape(input, [1, inputLen]);
         }
         else if (input.Rank == 2)
         {
@@ -203,7 +207,7 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
             }
             batchSize = flatBatch;
             inputLen = input.Shape[input.Rank - 1];
-            inputTensor = input.Reshape([batchSize, inputLen]);
+            inputTensor = Engine.Reshape(input, [batchSize, inputLen]);
         }
 
         // Validate input shape
@@ -215,61 +219,102 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
 
         _lastInput = inputTensor;
 
-        // Output tensor: [batchSize, OutputFeatures]
-        var output = TensorAllocator.Rent<T>([batchSize, OutputFeatures]);
+        // Batched Möbius matrix-vector multiply per Ganea et al. 2018, Section 2.3.
+        // M⊗_c x = tanh(||Mx|| * arctanh(√c·||x||) / (√c·||x||)) * Mx / (√c·||Mx||)
+        // All operations are tape-tracked tensor ops for automatic differentiation.
 
-        // For each sample in batch
-        for (int b = 0; b < batchSize; b++)
+        // Use |c| — curvature is stored as negative but Möbius formulas require positive
+        T c = NumOps.Abs(_curvature);
+        double cVal = NumOps.ToDouble(c);
+
+        // Euclidean limit: when c ≈ 0, Möbius matmul reduces to standard linear + bias
+        if (cVal < 1e-12)
         {
-            // Extract input vector for this sample
-            var inputVec = new Vector<T>(InputFeatures);
-            for (int i = 0; i < InputFeatures; i++)
-            {
-                inputVec[i] = inputTensor[b, i];
-            }
-
-            // Map Euclidean input to Poincaré ball via exponential map from origin.
-            // Per Nickel & Kiela (2017), this preserves magnitude differences unlike
-            // PoincareProject which clips to the boundary (losing scale information).
-            var origin = CreateOriginVector(InputFeatures);
-            var projectedInput = Engine.PoincareExpMap(origin, inputVec, _curvature);
-
-            // For each output feature
-            for (int o = 0; o < OutputFeatures; o++)
-            {
-                // Get weight vector for this output
-                var weightVec = new Vector<T>(InputFeatures);
-                for (int i = 0; i < InputFeatures; i++)
-                {
-                    weightVec[i] = _weights[o, i];
-                }
-
-                // Get bias vector for this output
-                var biasVec = new Vector<T>(InputFeatures);
-                for (int i = 0; i < InputFeatures; i++)
-                {
-                    biasVec[i] = _biases[o, i];
-                }
-
-                // Compute hyperbolic linear transformation:
-                // 1. Apply exponential map from origin with weight as tangent vector
-                var originForWeight = CreateOriginVector(InputFeatures);
-                var weightPoint = Engine.PoincareExpMap(originForWeight, weightVec, _curvature);
-
-                // 2. Mobius addition of input with weight point
-                var transformed = Engine.MobiusAdd(projectedInput, weightPoint, _curvature);
-
-                // 3. Mobius addition with bias (map bias to ball via exp map)
-                var originForBias = CreateOriginVector(InputFeatures);
-                var biasProjected = Engine.PoincareExpMap(originForBias, biasVec, _curvature);
-                var withBias = Engine.MobiusAdd(transformed, biasProjected, _curvature);
-
-                // 4. Compute output as distance from origin (scalar output)
-                // This gives a scalar representing "how far down the hierarchy"
-                var distance = Engine.PoincareDistance(origin, withBias, _curvature);
-                output[b, o] = distance;
-            }
+            var euclideanW = IsTrainingMode
+                ? Engine.TensorTranspose(_weights)
+                : (_weightsTCache ??= Engine.TensorTranspose(_weights));
+            var linear = Engine.FusedLinear(inputTensor, euclideanW, _biases, FusedActivationType.None);
+            _lastOutput = linear;
+            var euclideanOut = ApplyActivation(linear);
+            if (_originalInputShape == null || _originalInputShape.Length == 2) return euclideanOut;
+            if (_originalInputShape.Length == 1) return Engine.Reshape(euclideanOut, [OutputFeatures]);
+            var eucOutShape = new int[_originalInputShape.Length];
+            for (int d = 0; d < _originalInputShape.Length - 1; d++) eucOutShape[d] = _originalInputShape[d];
+            eucOutShape[_originalInputShape.Length - 1] = OutputFeatures;
+            return Engine.Reshape(euclideanOut, eucOutShape);
         }
+        T sqrtC = NumOps.Sqrt(c);
+        T eps = NumOps.FromDouble(1e-7);
+
+        // Step 0: Project Euclidean input into Poincaré ball via exp_0.
+        // The Möbius matmul M⊗_c x requires x to be inside the ball (√c·||x|| < 1).
+        // exp_0(v) = tanh(√c·||v||) * v / (√c·||v||) — maps any Euclidean vector into the ball.
+        //
+        // Per Nickel & Kiela (2017), pre-normalize inputs to unit norm before exp_0
+        // to prevent tanh saturation which kills gradients for large-norm inputs.
+        var rawNormSq = Engine.ReduceSum(Engine.TensorMultiply(inputTensor, inputTensor), new[] { 1 }, keepDims: true);
+        var rawNorm = Engine.TensorSqrt(Engine.TensorAddScalar(rawNormSq, eps));
+        var normalizedInput = Engine.TensorBroadcastDivide(inputTensor, Engine.TensorAddScalar(rawNorm, eps));
+        // Now ||normalizedInput|| ≈ 1, so √c·||v|| ≈ √c which is well within tanh's linear region for c=1
+        var unitNormSq = Engine.ReduceSum(Engine.TensorMultiply(normalizedInput, normalizedInput), new[] { 1 }, keepDims: true);
+        var unitNorm = Engine.TensorSqrt(Engine.TensorAddScalar(unitNormSq, eps));
+        var sqrtCraw = Engine.TensorMultiplyScalar(unitNorm, sqrtC);
+        var tanhFactor0 = Engine.TensorTanh(sqrtCraw); // tanh(√c·1) ≈ tanh(1) ≈ 0.76 — good gradient region
+        var projScale0 = Engine.TensorDivide(tanhFactor0, Engine.TensorAddScalar(sqrtCraw, eps));
+        var ballInput = Engine.TensorBroadcastMultiply(projScale0, normalizedInput); // now inside ball
+
+        // Step 1: Linear projection Mx = x_ball @ W^T
+        var weightsT = IsTrainingMode
+            ? Engine.TensorTranspose(_weights)
+            : (_weightsTCache ??= Engine.TensorTranspose(_weights));
+        var mx = Engine.TensorMatMul(ballInput, weightsT); // [batch, outputFeatures]
+
+        // Step 2: Compute ||x_ball|| per sample (already inside ball, so √c·||x|| < 1)
+        var xSq = Engine.TensorMultiply(ballInput, ballInput); // [batch, inputFeatures]
+        var xNormSq = Engine.ReduceSum(xSq, new[] { 1 }, keepDims: true); // [batch, 1]
+        var xNorm = Engine.TensorSqrt(Engine.TensorAddScalar(xNormSq, eps)); // [batch, 1]
+
+        // Step 3: Compute ||Mx|| per sample (L2 norm of output rows)
+        var mxSq = Engine.TensorMultiply(mx, mx); // [batch, outputFeatures]
+        var mxNormSq = Engine.ReduceSum(mxSq, new[] { 1 }, keepDims: true); // [batch, 1]
+        var mxNorm = Engine.TensorSqrt(Engine.TensorAddScalar(mxNormSq, eps)); // [batch, 1]
+
+        // Step 4: arctanh(√c·||x||) / (√c·||x||)
+        var sqrtCxNorm = Engine.TensorMultiplyScalar(xNorm, sqrtC); // [batch, 1]
+        // Clamp to (-1+eps, 1-eps) for arctanh stability
+        var clamped = Engine.TensorClamp(sqrtCxNorm, NumOps.FromDouble(-0.9999), NumOps.FromDouble(0.9999));
+        // atanh(x) = 0.5 * ln((1+x)/(1-x)) — zero allocation via TensorAddScalar
+        var onePlusX = Engine.TensorAddScalar(clamped, NumOps.One);
+        var oneMinusX = Engine.ScalarMinusTensor(NumOps.One, clamped);
+        var atanhVal = Engine.TensorMultiplyScalar(Engine.TensorLog(Engine.TensorDivide(onePlusX, oneMinusX)), NumOps.FromDouble(0.5)); // [batch, 1]
+        var ratio = Engine.TensorDivide(atanhVal, Engine.TensorAddScalar(clamped, eps)); // [batch, 1]
+
+        // Step 5: tanh(||Mx|| * ratio) / (√c·||Mx||)
+        var mxTimesRatio = Engine.TensorMultiply(mxNorm, ratio); // [batch, 1]
+        var tanhFactor = Engine.TensorTanh(mxTimesRatio); // [batch, 1]
+        var sqrtCmxNorm = Engine.TensorMultiplyScalar(mxNorm, sqrtC); // [batch, 1]
+        var scale = Engine.TensorDivide(tanhFactor, Engine.TensorAddScalar(sqrtCmxNorm, eps)); // [batch, 1]
+
+        // Step 6: Result in Poincaré ball = scale * Mx  [batch, outputFeatures]
+        // Broadcast scale [batch,1] across mx [batch, outputFeatures] via Engine
+        var resultInBall = Engine.TensorBroadcastMultiply(scale, mx);
+
+        // Step 7: Add scalar bias per output — _biases is [outputFeatures]
+        // Per Ganea et al. 2018, the Möbius matmul output is a point in the Poincaré ball.
+        // Output the ball coordinates directly (not distance-from-origin, which would be scalar).
+        var bias2D = Engine.Reshape(_biases, [1, OutputFeatures]);
+        var output = Engine.TensorBroadcastAdd(resultInBall, bias2D); // [batch, outputFeatures]
+
+        // Project back into Poincaré ball: if ||x|| >= maxNorm, scale x to maxNorm * x/||x||
+        // Per-coordinate clamp is insufficient — must enforce the L2 norm constraint.
+        double maxNorm = Math.Sqrt(0.99 / NumOps.ToDouble(c));
+        var normSq = Engine.ReduceSum(Engine.TensorMultiply(output, output), new[] { 1 }, keepDims: true); // [batch, 1]
+        var norm = Engine.TensorSqrt(Engine.TensorAddScalar(normSq, NumOps.FromDouble(1e-8))); // [batch, 1]
+        // projScale = min(1, maxNorm / ||x||) — clamp via TensorClamp upper bound of 1.0
+        var maxNormTensor = Tensor<T>.CreateDefault([batchSize, 1], NumOps.FromDouble(maxNorm));
+        var projScale = Engine.TensorDivide(maxNormTensor, Engine.TensorAddScalar(norm, NumOps.FromDouble(1e-8)));
+        projScale = Engine.TensorClamp(projScale, NumOps.Zero, NumOps.One); // clamp to [0, 1]
+        output = Engine.TensorBroadcastMultiply(projScale, output); // [batch, outputFeatures]
 
         _lastOutput = output;
 
@@ -283,7 +328,7 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
 
         if (_originalInputShape.Length == 1)
         {
-            return activated.Reshape([OutputFeatures]);
+            return Engine.Reshape(activated, [OutputFeatures]);
         }
 
         var outputShape = new int[_originalInputShape.Length];
@@ -292,7 +337,7 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
             outputShape[d] = _originalInputShape[d];
         }
         outputShape[_originalInputShape.Length - 1] = OutputFeatures;
-        return activated.Reshape(outputShape);
+        return Engine.Reshape(activated, outputShape);
     }
 
     // ForwardGpu removed — Tensor<T> is natively GPU-resident.
@@ -487,76 +532,22 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
         return grad;
     }
 
-    /// <summary>
-    /// Recomputes a single output value for the given batch and output feature index.
-    /// </summary>
-    private T ComputeSingleOutput(int b, int o)
-    {
-        if (_lastInput is null)
-            throw new InvalidOperationException("Forward must be called before ComputeSingleOutput.");
-
-        var inputVec = new Vector<T>(InputFeatures);
-        for (int i = 0; i < InputFeatures; i++)
-            inputVec[i] = _lastInput[b, i];
-
-        var origin = CreateOriginVector(InputFeatures);
-        var projectedInput = Engine.PoincareExpMap(origin, inputVec, _curvature);
-
-        var weightVec = new Vector<T>(InputFeatures);
-        for (int i = 0; i < InputFeatures; i++)
-            weightVec[i] = _weights[o, i];
-        var weightPoint = Engine.PoincareExpMap(CreateOriginVector(InputFeatures), weightVec, _curvature);
-
-        var transformed = Engine.MobiusAdd(projectedInput, weightPoint, _curvature);
-
-        var biasVec = new Vector<T>(InputFeatures);
-        for (int i = 0; i < InputFeatures; i++)
-            biasVec[i] = _biases[o, i];
-        var biasProjected = Engine.PoincareExpMap(CreateOriginVector(InputFeatures), biasVec, _curvature);
-        var withBias = Engine.MobiusAdd(transformed, biasProjected, _curvature);
-
-        return Engine.PoincareDistance(origin, withBias, _curvature);
-    }
-
     public override void UpdateParameters(T learningRate)
     {
         if (_weightsGradient == null || _biasesGradient == null)
-        {
             throw new InvalidOperationException("Backward pass must be called before updating parameters.");
-        }
-
-        var epsilon = NumOps.FromDouble(1e-5);
+        if (_biasesGradient.Length < OutputFeatures)
+            throw new InvalidOperationException($"Bias gradient shape mismatch: expected {OutputFeatures}, got {_biasesGradient.Length}.");
 
         for (int o = 0; o < OutputFeatures; o++)
         {
-            // Update weights in tangent space (per-element update)
             for (int i = 0; i < InputFeatures; i++)
-            {
-                var grad = _weightsGradient[o, i];
-                var scaledGrad = NumOps.Multiply(learningRate, grad);
-                _weights[o, i] = NumOps.Subtract(_weights[o, i], scaledGrad);
-            }
+                _weights[o, i] = NumOps.Subtract(_weights[o, i], NumOps.Multiply(learningRate, _weightsGradient[o, i]));
 
-            // Update biases using Riemannian gradient descent
-            // Build the full tangent vector from all bias gradients at once
-            var biasPoint = new Vector<T>(InputFeatures);
-            var tangentVec = new Vector<T>(InputFeatures);
-            for (int j = 0; j < InputFeatures; j++)
-            {
-                biasPoint[j] = _biases[o, j];
-                tangentVec[j] = NumOps.Negate(NumOps.Multiply(learningRate, _biasesGradient[o, j]));
-            }
-
-            // Project bias to valid region and apply exponential map update once per output
-            var projectedBias = Engine.PoincareProject(biasPoint, _curvature, epsilon);
-            var updatedBias = Engine.PoincareExpMap(projectedBias, tangentVec, _curvature);
-            updatedBias = Engine.PoincareProject(updatedBias, _curvature, epsilon);
-
-            for (int j = 0; j < InputFeatures; j++)
-            {
-                _biases[o, j] = updatedBias[j];
-            }
+            _biases[o] = NumOps.Subtract(_biases[o], NumOps.Multiply(learningRate, _biasesGradient[o]));
         }
+
+        _weightsTCache = null;
     }
 
     /// <summary>
@@ -568,23 +559,14 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
         var paramArray = new T[ParameterCount];
         int idx = 0;
 
-        // Flatten weights
-        for (int o = 0; o < OutputFeatures; o++)
-        {
-            for (int i = 0; i < InputFeatures; i++)
-            {
-                paramArray[idx++] = _weights[o, i];
-            }
-        }
+        // Use Data.Span for direct access — avoids any indexer overhead
+        var wSpan = _weights.Data.Span;
+        for (int j = 0; j < wSpan.Length && idx < paramArray.Length; j++)
+            paramArray[idx++] = wSpan[j];
 
-        // Flatten biases
-        for (int o = 0; o < OutputFeatures; o++)
-        {
-            for (int i = 0; i < InputFeatures; i++)
-            {
-                paramArray[idx++] = _biases[o, i];
-            }
-        }
+        var bSpan = _biases.Data.Span;
+        for (int j = 0; j < bSpan.Length && idx < paramArray.Length; j++)
+            paramArray[idx++] = bSpan[j];
 
         return new Vector<T>(paramArray);
     }
@@ -611,14 +593,13 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
             }
         }
 
-        // Restore biases
+        // Restore biases (scalar per output)
         for (int o = 0; o < OutputFeatures; o++)
         {
-            for (int i = 0; i < InputFeatures; i++)
-            {
-                _biases[o, i] = parameters[idx++];
-            }
+            _biases[o] = parameters[idx++];
         }
+
+        _weightsTCache = null;
     }
 
     /// <inheritdoc/>
@@ -639,12 +620,11 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
             idx += OutputFeatures * InputFeatures;
         }
 
-        // Biases gradients: also [OutputFeatures, InputFeatures] in hyperbolic space
+        // Biases gradients: [OutputFeatures] — scalar bias per output
         if (_biasesGradient != null)
         {
             for (int o = 0; o < OutputFeatures; o++)
-                for (int i = 0; i < InputFeatures; i++)
-                    gradients[idx++] = _biasesGradient[o, i];
+                    gradients[idx++] = _biasesGradient[o];
         }
 
         return gradients;
@@ -709,9 +689,7 @@ public partial class HyperbolicLinearLayer<T> : LayerBase<T>
         return origin;
     }
 
-    // GPU Parameter Updates region removed — Tensor<T> is natively GPU-resident.
-    // Parameters registered via RegisterTrainableParameter are automatically
-    // GPU-persistent via the engine. The optimizer's Step(TapeStepContext) handles
-    // all parameter updates. No separate GPU update path needed.
+    // SetTrainableParameters is auto-generated by TrainableParameterGenerator.
+    // It updates _weights and _biases to buffer-backed views.
 
 }

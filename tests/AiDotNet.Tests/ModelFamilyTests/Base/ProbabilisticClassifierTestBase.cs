@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -17,9 +19,11 @@ public abstract class ProbabilisticClassifierTestBase : ClassificationModelTestB
     // Violating this means the probability model is broken.
     // =====================================================
 
-    [Fact]
-    public void Probabilities_SumToOne()
+    [Fact(Timeout = 60000)]
+    public async Task Probabilities_SumToOne()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, Features, NumClasses, rng);
@@ -48,9 +52,11 @@ public abstract class ProbabilisticClassifierTestBase : ClassificationModelTestB
     // predictions (most predictions should be correct).
     // =====================================================
 
-    [Fact]
-    public void HighConfidence_OnSeparableData()
+    [Fact(Timeout = 60000)]
+    public async Task HighConfidence_OnSeparableData()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
 
@@ -90,9 +96,11 @@ public abstract class ProbabilisticClassifierTestBase : ClassificationModelTestB
     // Predictions outside this range indicate a broken decision function.
     // =====================================================
 
-    [Fact]
-    public void Predictions_AreValidClassIndices()
+    [Fact(Timeout = 60000)]
+    public async Task Predictions_AreValidClassIndices()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var (trainX, trainY) = GenerateData(TrainSamples, Features, NumClasses, rng);

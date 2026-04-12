@@ -204,7 +204,7 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
     private void InitializeTensor(Tensor<T> tensor, T scale)
     {
         // Create random tensor using Engine operations
-        var randomTensor = Tensor<T>.CreateRandom(tensor.Shape.ToArray());
+        var randomTensor = Tensor<T>.CreateRandom(tensor._shape);
 
         // Shift to [-0.5, 0.5] range: randomTensor - 0.5
         var halfTensor = new Tensor<T>(tensor._shape);
@@ -270,7 +270,7 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
         {
             // 2D [nodes, features]: add batch dim
             batchSize = 1;
-            processInput = input.Reshape([1, input.Shape[0], input.Shape[1]]);
+            processInput = Engine.Reshape(input, [1, input.Shape[0], input.Shape[1]]);
         }
         else if (rank == 3)
         {
@@ -285,13 +285,13 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
             for (int d = 0; d < rank - 2; d++)
                 flatBatch *= input.Shape[d];
             batchSize = flatBatch;
-            processInput = input.Reshape([flatBatch, input.Shape[rank - 2], input.Shape[rank - 1]]);
+            processInput = Engine.Reshape(input, [flatBatch, input.Shape[rank - 2], input.Shape[rank - 1]]);
         }
         else
         {
             // 1D: treat as single node with features
             batchSize = 1;
-            processInput = input.Reshape([1, 1, input.Shape[0]]);
+            processInput = Engine.Reshape(input, [1, 1, input.Shape[0]]);
         }
 
         _lastInput = processInput;
@@ -400,12 +400,12 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
         {
             if (_originalInputShape.Length == 2)
             {
-                return result.Reshape([numNodes, _outputFeatures]);
+                return Engine.Reshape(result, [numNodes, _outputFeatures]);
             }
 
             if (_originalInputShape.Length == 1)
             {
-                return result.Reshape([_outputFeatures]);
+                return Engine.Reshape(result, [_outputFeatures]);
             }
 
             var newShape = new int[_originalInputShape.Length];
@@ -414,7 +414,7 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
                 newShape[d] = _originalInputShape[d];
             }
             newShape[_originalInputShape.Length - 1] = _outputFeatures;
-            return result.Reshape(newShape);
+            return Engine.Reshape(result, newShape);
         }
 
         return result;
@@ -967,12 +967,12 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
 
         // Set edge network weights 1
         var w1Params = parameters.SubVector(index, w1Size);
-        _edgeNetworkWeights1 = Tensor<T>.FromVector(w1Params).Reshape(_edgeNetworkWeights1.Shape.ToArray());
+        _edgeNetworkWeights1 = Tensor<T>.FromVector(w1Params).Reshape(_edgeNetworkWeights1._shape);
         index += w1Size;
 
         // Set edge network weights 2
         var w2Params = parameters.SubVector(index, w2Size);
-        _edgeNetworkWeights2 = Tensor<T>.FromVector(w2Params).Reshape(_edgeNetworkWeights2.Shape.ToArray());
+        _edgeNetworkWeights2 = Tensor<T>.FromVector(w2Params).Reshape(_edgeNetworkWeights2._shape);
         index += w2Size;
 
         // Set edge network bias 1
@@ -987,7 +987,7 @@ public partial class EdgeConditionalConvolutionalLayer<T> : LayerBase<T>, IGraph
 
         // Set self weights
         var selfParams = parameters.SubVector(index, selfSize);
-        _selfWeights = Tensor<T>.FromVector(selfParams).Reshape(_selfWeights.Shape.ToArray());
+        _selfWeights = Tensor<T>.FromVector(selfParams).Reshape(_selfWeights._shape);
         index += selfSize;
 
         // Set bias

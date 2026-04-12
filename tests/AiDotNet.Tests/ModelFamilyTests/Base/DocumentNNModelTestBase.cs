@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -17,9 +19,11 @@ public abstract class DocumentNNModelTestBase : NeuralNetworkModelTestBase
     // should produce finite output, not NaN or exceptions.
     // =====================================================
 
-    [Fact]
-    public void EmptyInput_ShouldNotCrash()
+    [Fact(Timeout = 120000)]
+    public async Task EmptyInput_ShouldNotCrash()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
         var emptyInput = CreateConstantTensor(InputShape, 0.0);
 
@@ -39,9 +43,11 @@ public abstract class DocumentNNModelTestBase : NeuralNetworkModelTestBase
     // Same input shape should always produce same output shape.
     // =====================================================
 
-    [Fact]
-    public void OutputDimensionality_Consistent()
+    [Fact(Timeout = 120000)]
+    public async Task OutputDimensionality_Consistent()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
         var input1 = CreateRandomTensor(InputShape, rng);
@@ -59,9 +65,11 @@ public abstract class DocumentNNModelTestBase : NeuralNetworkModelTestBase
     // different representations. A model ignoring content is broken.
     // =====================================================
 
-    [Fact]
-    public void DifferentDocuments_DifferentOutputs()
+    [Fact(Timeout = 120000)]
+    public async Task DifferentDocuments_DifferentOutputs()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var network = CreateNetwork();
 
         var doc1 = CreateConstantTensor(InputShape, 0.2);
@@ -89,9 +97,11 @@ public abstract class DocumentNNModelTestBase : NeuralNetworkModelTestBase
     // Doubling input values should not cause overflow.
     // =====================================================
 
-    [Fact]
-    public void LargerInput_ShouldNotExplode()
+    [Fact(Timeout = 120000)]
+    public async Task LargerInput_ShouldNotExplode()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var network = CreateNetwork();
 

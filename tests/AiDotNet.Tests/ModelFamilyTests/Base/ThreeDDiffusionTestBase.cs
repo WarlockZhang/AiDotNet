@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -10,9 +12,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class ThreeDDiffusionTestBase : LatentDiffusionTestBase
 {
-    [Fact]
-    public void Output_ShouldBeNonEmpty()
+    [Fact(Timeout = 120000)]
+    public async Task Output_ShouldBeNonEmpty()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var input = CreateRandomTensor(InputShape, rng);
@@ -20,9 +24,11 @@ public abstract class ThreeDDiffusionTestBase : LatentDiffusionTestBase
         Assert.True(output.Length > 0, "3D diffusion model produced empty output — no geometry generated.");
     }
 
-    [Fact]
-    public void VertexPositions_ShouldBeBounded()
+    [Fact(Timeout = 120000)]
+    public async Task VertexPositions_ShouldBeBounded()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var input = CreateRandomTensor(InputShape, rng);

@@ -2,6 +2,8 @@ using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using AiDotNet.Tensors.LinearAlgebra;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -46,9 +48,11 @@ public abstract class GraphLayerTestBase
     // INVARIANT 1: Forward produces finite output
     // =========================================================================
 
-    [Fact]
-    public void Forward_ShouldProduceFiniteOutput()
+    [Fact(Timeout = 30000)]
+    public async Task Forward_ShouldProduceFiniteOutput()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var layer = CreateAndSetup();
         var input = CreateRandomTensor(InputShape);
 
@@ -66,9 +70,11 @@ public abstract class GraphLayerTestBase
     // INVARIANT 2: Forward is deterministic
     // =========================================================================
 
-    [Fact]
-    public void Forward_ShouldBeDeterministic()
+    [Fact(Timeout = 30000)]
+    public async Task Forward_ShouldBeDeterministic()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var layer = CreateAndSetup();
         layer.SetTrainingMode(false);
         var input = CreateRandomTensor(InputShape);
@@ -86,9 +92,11 @@ public abstract class GraphLayerTestBase
     // INVARIANT 3: Different inputs produce different outputs
     // =========================================================================
 
-    [Fact]
-    public void Forward_DifferentInputs_ShouldProduceDifferentOutputs()
+    [Fact(Timeout = 30000)]
+    public async Task Forward_DifferentInputs_ShouldProduceDifferentOutputs()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var layer = CreateAndSetup();
         layer.SetTrainingMode(false);
 
@@ -122,9 +130,11 @@ public abstract class GraphLayerTestBase
     // INVARIANT 5: Parameter count consistency
     // =========================================================================
 
-    [Fact]
-    public void Parameters_CountShouldMatchVector()
+    [Fact(Timeout = 30000)]
+    public async Task Parameters_CountShouldMatchVector()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var layer = CreateAndSetup();
         int count = layer.ParameterCount;
         var parameters = layer.GetParameters();
@@ -140,9 +150,11 @@ public abstract class GraphLayerTestBase
     // INVARIANT 6: ResetState doesn't break the layer
     // =========================================================================
 
-    [Fact]
-    public void ResetState_ShouldNotBreakForward()
+    [Fact(Timeout = 30000)]
+    public async Task ResetState_ShouldNotBreakForward()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var layer = CreateAndSetup();
         var input = CreateRandomTensor(InputShape);
 

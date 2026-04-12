@@ -402,7 +402,7 @@ public partial class MessagePassingLayer<T> : LayerBase<T>, IGraphConvolutionLay
     private void InitializeTensor(Tensor<T> tensor, T scale)
     {
         // Create random tensor using Engine operations
-        var randomTensor = Tensor<T>.CreateRandom(tensor.Shape.ToArray());
+        var randomTensor = Tensor<T>.CreateRandom(tensor._shape);
 
         // Shift to [-0.5, 0.5] range: randomTensor - 0.5
         var halfTensor = new Tensor<T>(tensor._shape);
@@ -496,7 +496,7 @@ public partial class MessagePassingLayer<T> : LayerBase<T>, IGraphConvolutionLay
         if (edgeFeatures.Shape.Length != 3)
         {
             throw new ArgumentException(
-                $"Edge features must be a 3D tensor [batch, numEdgeSlots, edgeFeatureDim], but got shape [{string.Join(", ", edgeFeatures.Shape.ToArray())}].");
+                $"Edge features must be a 3D tensor [batch, numEdgeSlots, edgeFeatureDim], but got shape [{string.Join(", ", edgeFeatures._shape)}].");
         }
         _edgeFeatures = edgeFeatures;
     }
@@ -538,7 +538,7 @@ public partial class MessagePassingLayer<T> : LayerBase<T>, IGraphConvolutionLay
             // 2D: [nodes, features] - single unbatched graph
             batchSize = 1;
             numNodes = input.Shape[0];
-            processInput = input.Reshape([1, input.Shape[0], input.Shape[1]]);
+            processInput = Engine.Reshape(input, [1, input.Shape[0], input.Shape[1]]);
         }
         else
         {
@@ -554,7 +554,7 @@ public partial class MessagePassingLayer<T> : LayerBase<T>, IGraphConvolutionLay
                     flatBatch *= input.Shape[d];
                 batchSize = flatBatch;
                 numNodes = input.Shape[rank - 2];
-                processInput = input.Reshape([flatBatch, input.Shape[rank - 2], input.Shape[rank - 1]]);
+                processInput = Engine.Reshape(input, [flatBatch, input.Shape[rank - 2], input.Shape[rank - 1]]);
             }
         }
 
@@ -1029,7 +1029,7 @@ public partial class MessagePassingLayer<T> : LayerBase<T>, IGraphConvolutionLay
             throw new ArgumentException("At least one input tensor is required.", nameof(inputs));
 
         var input = inputs[0];
-        if (input.Shape.ToArray() == null || input.Shape.Length < 2)
+        if (input._shape == null || input.Shape.Length < 2)
             throw new ArgumentException("Input must be at least 2D [numNodes, inputFeatures].");
 
         if (_adjacencyMatrix == null)

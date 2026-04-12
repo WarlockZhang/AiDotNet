@@ -1266,7 +1266,7 @@ public class SpyNetLayer<T> : LayerBase<T>
                 flowNode = TensorOperations<T>.Upsample(flowNode, 2);
                 // Scale flow values by 2 for upsampling
                 var scaleNode = TensorOperations<T>.Constant(
-                    CreateScaleTensor(flowNode.Value.Shape.ToArray(), 2.0), $"{namePrefix}scale_{level}");
+                    CreateScaleTensor(flowNode.Value._shape, 2.0), $"{namePrefix}scale_{level}");
                 flowNode = TensorOperations<T>.ElementwiseMultiply(flowNode, scaleNode);
             }
 
@@ -1313,7 +1313,7 @@ public class SpyNetLayer<T> : LayerBase<T>
     {
         // Create identity grid and add flow to get sampling positions
         // Grid should be [batch, height, width, 2] in normalized coordinates [-1, 1]
-        var flowShape = flowNode.Value.Shape.ToArray();
+        var flowShape = flowNode.Value._shape;
         int batch = flowShape[0];
         int height = flowShape[2];
         int width = flowShape[3];

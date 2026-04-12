@@ -466,7 +466,7 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
     private void InitializeTensor(Tensor<T> tensor, T scale)
     {
         // Create random tensor using Engine operations
-        var randomTensor = Tensor<T>.CreateRandom(tensor.Shape.ToArray());
+        var randomTensor = Tensor<T>.CreateRandom(tensor._shape);
 
         // Shift to [-0.5, 0.5] range: randomTensor - 0.5
         var halfTensor = new Tensor<T>(tensor._shape);
@@ -661,7 +661,7 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
         if (rank == 2)
         {
             batchSize = 1;
-            processInput = input.Reshape([1, input.Shape[0], input.Shape[1]]);
+            processInput = Engine.Reshape(input, [1, input.Shape[0], input.Shape[1]]);
         }
         else if (rank == 3)
         {
@@ -674,7 +674,7 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
             for (int d = 0; d < rank - 2; d++)
                 flatBatch *= input.Shape[d];
             batchSize = flatBatch;
-            processInput = input.Reshape([flatBatch, input.Shape[rank - 2], input.Shape[rank - 1]]);
+            processInput = Engine.Reshape(input, [flatBatch, input.Shape[rank - 2], input.Shape[rank - 1]]);
         }
 
         _lastInput = processInput;
@@ -733,13 +733,13 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
                 // Reshape 2D adjacency [nodes, nodes] to 3D [1, nodes, nodes] and broadcast to [batchSize, nodes, nodes]
                 if (batchSize == 1)
                 {
-                    adjForBatch = _adjacencyMatrix.Reshape([1, numNodes, numNodes]);
+                    adjForBatch = Engine.Reshape(_adjacencyMatrix, [1, numNodes, numNodes]);
                 }
                 else
                 {
                     // Broadcast: repeat adjacency matrix for each batch item using Engine.TensorTile
                     // First reshape to [1, nodes, nodes] then tile along batch dimension
-                    var adjReshaped = _adjacencyMatrix.Reshape([1, numNodes, numNodes]);
+                    var adjReshaped = Engine.Reshape(_adjacencyMatrix, [1, numNodes, numNodes]);
                     adjForBatch = Engine.TensorTile(adjReshaped, [batchSize, 1, 1]);
                 }
             }
@@ -775,7 +775,7 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
             if (_originalInputShape.Length == 2)
             {
                 // Was 2D, return [nodes, outputFeatures]
-                return result.Reshape([numNodes, outputFeatures]);
+                return Engine.Reshape(result, [numNodes, outputFeatures]);
             }
             else
             {
@@ -784,7 +784,7 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
                 for (int d = 0; d < _originalInputShape.Length - 1; d++)
                     newShape[d] = _originalInputShape[d];
                 newShape[_originalInputShape.Length - 1] = outputFeatures;
-                return result.Reshape(newShape);
+                return Engine.Reshape(result, newShape);
             }
         }
 
@@ -1188,7 +1188,7 @@ public partial class GraphConvolutionalLayer<T> : LayerBase<T>, IAuxiliaryLossLa
 
         // Set weights using Tensor.FromVector
         var weightsParams = parameters.SubVector(index, weightsSize);
-        _weights = Tensor<T>.FromVector(weightsParams).Reshape(_weights.Shape.ToArray());
+        _weights = Tensor<T>.FromVector(weightsParams).Reshape(_weights._shape);
         index += weightsSize;
 
         // Set bias using Tensor.FromVector

@@ -425,21 +425,21 @@ public partial class ConditionalRandomFieldLayer<T> : LayerBase<T>
         T half = NumOps.FromDouble(0.5);
 
         // Initialize transition matrix: (random - 0.5) * scale
-        var transRandom = Tensor<T>.CreateRandom(_transitionMatrix.Length, 1).Reshape(_transitionMatrix.Shape.ToArray());
+        var transRandom = Tensor<T>.CreateRandom(_transitionMatrix.Length, 1).Reshape(_transitionMatrix._shape);
         var transHalf = new Tensor<T>(_transitionMatrix._shape);
         transHalf.Fill(half);
         var transCentered = Engine.TensorSubtract(transRandom, transHalf);
         _transitionMatrix = Engine.TensorMultiplyScalar(transCentered, scale);
 
         // Initialize start scores: (random - 0.5) * scale
-        var startRandom = Tensor<T>.CreateRandom(_startScores.Length, 1).Reshape(_startScores.Shape.ToArray());
+        var startRandom = Tensor<T>.CreateRandom(_startScores.Length, 1).Reshape(_startScores._shape);
         var startHalf = new Tensor<T>(_startScores._shape);
         startHalf.Fill(half);
         var startCentered = Engine.TensorSubtract(startRandom, startHalf);
         _startScores = Engine.TensorMultiplyScalar(startCentered, scale);
 
         // Initialize end scores: (random - 0.5) * scale
-        var endRandom = Tensor<T>.CreateRandom(_endScores.Length, 1).Reshape(_endScores.Shape.ToArray());
+        var endRandom = Tensor<T>.CreateRandom(_endScores.Length, 1).Reshape(_endScores._shape);
         var endHalf = new Tensor<T>(_endScores._shape);
         endHalf.Fill(half);
         var endCentered = Engine.TensorSubtract(endRandom, endHalf);
@@ -500,7 +500,7 @@ public partial class ConditionalRandomFieldLayer<T> : LayerBase<T>
         {
             // 2D [sequenceLength, numClasses]: add batch dim
             batchSize = 1;
-            input3D = input.Reshape([1, input.Shape[0], input.Shape[1]]);
+            input3D = Engine.Reshape(input, [1, input.Shape[0], input.Shape[1]]);
         }
         else if (rank == 3)
         {
@@ -516,13 +516,13 @@ public partial class ConditionalRandomFieldLayer<T> : LayerBase<T>
             for (int d = 0; d < rank - 2; d++)
                 flatBatch *= input.Shape[d];
             batchSize = flatBatch;
-            input3D = input.Reshape([flatBatch, input.Shape[rank - 2], input.Shape[rank - 1]]);
+            input3D = Engine.Reshape(input, [flatBatch, input.Shape[rank - 2], input.Shape[rank - 1]]);
         }
         else
         {
             // 1D: treat as [1, 1, features] - single batch, single timestep
             batchSize = 1;
-            input3D = input.Reshape([1, 1, input.Shape[0]]);
+            input3D = Engine.Reshape(input, [1, 1, input.Shape[0]]);
         }
 
         _lastInput = input3D;
@@ -571,7 +571,7 @@ public partial class ConditionalRandomFieldLayer<T> : LayerBase<T>
                 // prevViterbi: [numClasses, 1] + transition: [numClasses, numClasses] -> [numClasses, numClasses]
                 // Then max over axis 0
 
-                var prevExpanded = prevViterbi.Reshape([_numClasses, 1]); // [numClasses, 1]
+                var prevExpanded = Engine.Reshape(prevViterbi, [_numClasses, 1]); // [numClasses, 1]
                 var scoresWithTrans = Engine.TensorBroadcastAdd(prevExpanded, _transitionMatrix); // [numClasses, numClasses]
 
                 // During training: use log-sum-exp (smooth, differentiable)
@@ -673,7 +673,7 @@ public partial class ConditionalRandomFieldLayer<T> : LayerBase<T>
         // Restore original rank if needed for any-rank tensor support
         if (_originalInputShape != null && _originalInputShape.Length != 3)
         {
-            return output.Reshape(_originalInputShape);
+            return Engine.Reshape(output, _originalInputShape);
         }
 
         return output;
@@ -849,9 +849,9 @@ public partial class ConditionalRandomFieldLayer<T> : LayerBase<T>
         var startVec = parameters.Slice(transSize, _numClasses);
         var endVec = parameters.Slice(transSize + _numClasses, _numClasses);
 
-        _transitionMatrix = Tensor<T>.FromVector(transVec).Reshape(_transitionMatrix.Shape.ToArray());
-        _startScores = Tensor<T>.FromVector(startVec).Reshape(_startScores.Shape.ToArray());
-        _endScores = Tensor<T>.FromVector(endVec).Reshape(_endScores.Shape.ToArray());
+        _transitionMatrix = Tensor<T>.FromVector(transVec).Reshape(_transitionMatrix._shape);
+        _startScores = Tensor<T>.FromVector(startVec).Reshape(_startScores._shape);
+        _endScores = Tensor<T>.FromVector(endVec).Reshape(_endScores._shape);
     }
 
     /// <summary>

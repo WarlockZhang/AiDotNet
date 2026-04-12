@@ -1,6 +1,8 @@
 using AiDotNet.Interfaces;
 using AiDotNet.Tensors;
 using Xunit;
+using System.Threading.Tasks;
+using AiDotNet.Tensors.Helpers;
 
 namespace AiDotNet.Tests.ModelFamilyTests.Base;
 
@@ -10,9 +12,11 @@ namespace AiDotNet.Tests.ModelFamilyTests.Base;
 /// </summary>
 public abstract class VideoDiffusionTestBase : LatentDiffusionTestBase
 {
-    [Fact]
-    public void TemporalCoherence_AdjacentFrames()
+    [Fact(Timeout = 120000)]
+    public async Task TemporalCoherence_AdjacentFrames()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var input = CreateRandomTensor(InputShape, rng);
@@ -30,9 +34,11 @@ public abstract class VideoDiffusionTestBase : LatentDiffusionTestBase
         }
     }
 
-    [Fact]
-    public void FrameCount_ShouldBePositive()
+    [Fact(Timeout = 120000)]
+    public async Task FrameCount_ShouldBePositive()
     {
+        await Task.Yield();
+        using var _arena = TensorArena.Create();
         var rng = ModelTestHelpers.CreateSeededRandom();
         var model = CreateModel();
         var input = CreateRandomTensor(InputShape, rng);

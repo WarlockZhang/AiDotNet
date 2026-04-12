@@ -2042,7 +2042,7 @@ public abstract class LayerBase<T> : ILayer<T>, ITrainableLayer<T>, IDisposable
     {
         if (activation == null)
         {
-            return Tensor<T>.CreateDefault(input.Shape.ToArray(), NumOps.One);
+            return Tensor<T>.CreateDefault(input._shape, NumOps.One);
         }
 
         return activation.Derivative(input);
@@ -2121,7 +2121,7 @@ public abstract class LayerBase<T> : ILayer<T>, ITrainableLayer<T>, IDisposable
         // This happens when a layer reshapes internally (e.g., 1D→2D in DenseLayer, RecurrentLayer).
         if (input.Rank != outputGradient.Rank && input.Length == outputGradient.Length)
         {
-            outputGradient = outputGradient.Reshape(input.Shape.ToArray());
+            outputGradient = outputGradient.Reshape(input._shape);
         }
         else if (input.Rank != outputGradient.Rank)
         {
@@ -2166,7 +2166,7 @@ public abstract class LayerBase<T> : ILayer<T>, ITrainableLayer<T>, IDisposable
                 }
             }
 
-            return flatInputGrad.Reshape(input.Shape.ToArray());
+            return flatInputGrad.Reshape(input._shape);
         }
         else if (ScalarActivation != null)
         {
@@ -2197,7 +2197,7 @@ public abstract class LayerBase<T> : ILayer<T>, ITrainableLayer<T>, IDisposable
             // flattened reconstruction layer outputs different rank than gradient)
             if (deriv.Length == outputGradient.Length && deriv.Rank != outputGradient.Rank)
             {
-                deriv = deriv.Reshape(outputGradient.Shape.ToArray());
+                deriv = deriv.Reshape(outputGradient._shape);
             }
             // Pop the cached pre-activation to keep cache balanced
             if (_preActivationCache.Count > 0) _preActivationCache.Pop();

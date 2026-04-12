@@ -784,7 +784,7 @@ public partial class SpikingLayer<T> : LayerBase<T>
         {
             // 2D: process each batch item (for now flatten to process first item)
             // SpikingLayer processes one sample at a time
-            inputFlat = input.Reshape([input.Shape[0] * input.Shape[1]]);
+            inputFlat = Engine.Reshape(input, [input.Shape[0] * input.Shape[1]]);
             // Take only inputSize elements if tensor is larger
             if (inputFlat.Length > inputSize)
             {
@@ -797,7 +797,7 @@ public partial class SpikingLayer<T> : LayerBase<T>
             int totalElements = 1;
             for (int d = 0; d < rank; d++)
                 totalElements *= input.Shape[d];
-            inputFlat = input.Reshape([totalElements]);
+            inputFlat = Engine.Reshape(input, [totalElements]);
             // Take only inputSize elements if tensor is larger
             if (inputFlat.Length > inputSize)
             {
@@ -933,7 +933,7 @@ public partial class SpikingLayer<T> : LayerBase<T>
     {
         // Calculate input current using Engine operations
         // Reshape input for matrix multiply
-        var inputReshaped = input.Reshape([input.Length, 1]);
+        var inputReshaped = Engine.Reshape(input, new[] { input.Length, 1 });
 
         // weights: [inputSize, outputSize], input: [inputSize, 1] -> result: [outputSize, 1]
         // Need to transpose weights for proper matrix multiplication: [outputSize, inputSize] @ [inputSize, 1] = [outputSize, 1]
@@ -941,11 +941,11 @@ public partial class SpikingLayer<T> : LayerBase<T>
         var product = Engine.TensorMatMul(weightsT, inputReshaped);
 
         // Add bias
-        var biasReshaped = _bias.Reshape([_bias.Shape[0], 1]);
+        var biasReshaped = Engine.Reshape(_bias, new[] { _bias.Shape[0], 1 });
         var withBias = Engine.TensorAdd(product, biasReshaped);
 
         // Flatten to 1D tensor for neuron update
-        var current = withBias.Reshape([_bias.Shape[0]]);
+        var current = Engine.Reshape(withBias, new[] { _bias.Shape[0] });
 
         // Update neuron states based on the neuron model
         return _neuronType switch
@@ -1430,10 +1430,10 @@ public partial class SpikingLayer<T> : LayerBase<T>
         _spikes = Engine.TensorWhere(belowReset, spikesZeroTensor, newSpikes);
 
         // Update state variables (reshape back if needed)
-        _membranePotential = vNew.Reshape(_membranePotential.Shape.ToArray());
-        _nGate = nNew.Reshape(_nGate.Shape.ToArray());
-        _mGate = mNew.Reshape(_mGate.Shape.ToArray());
-        _hGate = hNew.Reshape(_hGate.Shape.ToArray());
+        _membranePotential = vNew.Reshape(_membranePotential._shape);
+        _nGate = nNew.Reshape(_nGate._shape);
+        _mGate = mNew.Reshape(_mGate._shape);
+        _hGate = hNew.Reshape(_hGate._shape);
 
         return _spikes;
     }

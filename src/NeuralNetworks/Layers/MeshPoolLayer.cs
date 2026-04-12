@@ -227,7 +227,7 @@ public partial class MeshPoolLayer<T> : LayerBase<T>
         if (input.Rank != 2 || input.Shape[1] != InputChannels)
         {
             throw new ArgumentException(
-                $"MeshPoolLayer expects input shape [numEdges, {InputChannels}], got [{string.Join(", ", input.Shape.ToArray())}].",
+                $"MeshPoolLayer expects input shape [numEdges, {InputChannels}], got [{string.Join(", ", input._shape)}].",
                 nameof(input));
         }
 
