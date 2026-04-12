@@ -44,25 +44,43 @@ public class WikiText103DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, 
         _dataPath = _options.DataPath ?? DatasetDownloader.GetDefaultDataPath("wikitext-103");
     }
 
+    private static readonly string DownloadUrl =
+        "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-103-v1.zip";
+
     /// <inheritdoc/>
     protected override async Task LoadDataCoreAsync(CancellationToken cancellationToken)
     {
-        string dataDir = Path.Combine(_dataPath, "wikitext-103");
-        if (!Directory.Exists(dataDir))
-            dataDir = _dataPath;
-
         string splitFile = _options.Split switch
         {
             Geometry.DatasetSplit.Test => "wiki.test.tokens",
             Geometry.DatasetSplit.Validation => "wiki.valid.tokens",
             _ => "wiki.train.tokens"
         };
-        string filePath = Path.Combine(dataDir, splitFile);
+        string filePath = Path.Combine(ResolveDataDir(), splitFile);
+
+        if (!File.Exists(filePath) && _options.AutoDownload)
+        {
+            try
+            {
+                await DatasetDownloader.DownloadAndExtractZipAsync(
+                    DownloadUrl, _dataPath, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to download WikiText-103 from {DownloadUrl}. " +
+                    $"Check your network connection or download manually to {_dataPath}.",
+                    ex);
+            }
+
+            filePath = Path.Combine(ResolveDataDir(), splitFile);
+        }
+
         if (!File.Exists(filePath))
         {
             throw new FileNotFoundException(
                 $"WikiText-103 data not found at {filePath}. " +
-                "Download from https://www.salesforce.com/products/einstein/ai-research/the-wikitext-dependency-language-modeling-dataset/.");
+                $"Enable AutoDownload or download and extract {DownloadUrl} to {_dataPath}.");
         }
 
         string text = await FilePolyfill.ReadAllTextAsync(filePath, cancellationToken);
@@ -142,5 +160,14 @@ public class WikiText103DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, 
             new InMemoryDataLoader<T, Tensor<T>, Tensor<T>>(TextLoaderHelper.ExtractTensorBatch(features, shuffled.Skip(trainSize).Take(valSize).ToArray()), TextLoaderHelper.ExtractTensorBatch(labels, shuffled.Skip(trainSize).Take(valSize).ToArray())),
             new InMemoryDataLoader<T, Tensor<T>, Tensor<T>>(TextLoaderHelper.ExtractTensorBatch(features, shuffled.Skip(trainSize + valSize).ToArray()), TextLoaderHelper.ExtractTensorBatch(labels, shuffled.Skip(trainSize + valSize).ToArray()))
         );
+    }
+
+    private string ResolveDataDir()
+    {
+        string subDir = Path.Combine(_dataPath, "wikitext-103");
+        if (Directory.Exists(subDir) &&
+            Directory.GetFiles(subDir, "wiki.*.tokens").Length > 0)
+            return subDir;
+        return _dataPath;
     }
 }
