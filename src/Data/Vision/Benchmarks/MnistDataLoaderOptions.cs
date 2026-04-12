@@ -29,8 +29,18 @@ public sealed class MnistDataLoaderOptions
 
     /// <summary>
     /// Whether to flatten images to 1D vectors (784) instead of 2D (28x28). Default is false.
+    /// When true, the <see cref="Layout"/> option is ignored.
     /// </summary>
     public bool Flatten { get; set; }
+
+    /// <summary>
+    /// Axis ordering for the image tensor. Default is <see cref="ImageTensorLayout.NHWC"/>
+    /// (<c>[B, 28, 28, 1]</c>). Set to <see cref="ImageTensorLayout.NCHW"/> for
+    /// <c>[B, 1, 28, 28]</c>, which is the convention used by
+    /// <c>ConvolutionalLayer&lt;T&gt;</c> and PyTorch-style models.
+    /// Ignored when <see cref="Flatten"/> is true.
+    /// </summary>
+    public ImageTensorLayout Layout { get; set; } = ImageTensorLayout.NHWC;
 
     /// <summary>
     /// Optional maximum number of samples to load.

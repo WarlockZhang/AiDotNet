@@ -101,8 +101,8 @@ public class Cifar10DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Tens
             byte[] sample = allData[i];
             int label = sample[0];
 
-            // Convert CHW to HWC format for consistency
             int featureOffset = i * pixelsPerImage;
+            bool nchw = _options.Layout == ImageTensorLayout.NCHW;
             for (int h = 0; h < 32; h++)
             {
                 for (int w = 0; w < 32; w++)
@@ -110,7 +110,9 @@ public class Cifar10DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Tens
                     for (int c = 0; c < 3; c++)
                     {
                         int srcIdx = 1 + c * 1024 + h * 32 + w; // CHW in source
-                        int dstIdx = featureOffset + (h * 32 + w) * 3 + c; // HWC in dest
+                        int dstIdx = nchw
+                            ? featureOffset + c * 1024 + h * 32 + w  // NCHW
+                            : featureOffset + (h * 32 + w) * 3 + c;  // NHWC
                         double value = sample[srcIdx];
                         if (_options.Normalize) value /= 255.0;
                         featuresData[dstIdx] = NumOps.FromDouble(value);
@@ -122,7 +124,10 @@ public class Cifar10DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Tens
                 labelsData[i * 10 + label] = NumOps.One;
         }
 
-        LoadedFeatures = new Tensor<T>(featuresData, new[] { totalSamples, 32, 32, 3 });
+        int[] shape = _options.Layout == ImageTensorLayout.NCHW
+            ? new[] { totalSamples, 3, 32, 32 }
+            : new[] { totalSamples, 32, 32, 3 };
+        LoadedFeatures = new Tensor<T>(featuresData, shape);
         LoadedLabels = new Tensor<T>(labelsData, new[] { totalSamples, 10 });
         InitializeIndices(totalSamples);
     }
