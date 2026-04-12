@@ -31,11 +31,6 @@
     <PackageReference Include="Moq" />
   </ItemGroup>
 
-  <!-- MathF polyfill for net471 (AiDotNet.Tensors provides it internally but not publicly) -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'net471'">
-    <PackageReference Include="Microsoft.Bcl.Numerics" />
-  </ItemGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\..\src\AiDotNet.csproj" />
   </ItemGroup>
