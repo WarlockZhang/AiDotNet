@@ -138,8 +138,9 @@ jobs:
         with:
           name: build-output-${{ github.sha }}
           path: |
-            **/bin/Release/
-            **/obj/Release/
+            src/bin/Release/
+            tests/AiDotNet.Tests/bin/Release/
+            tests/AiDotNet.Serving.Tests/bin/Release/
           retention-days: 1
 
       - name: Build NuGet package
