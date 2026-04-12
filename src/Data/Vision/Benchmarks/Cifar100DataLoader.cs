@@ -80,6 +80,7 @@ public class Cifar100DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Ten
         var featuresData = new T[totalSamples * 32 * 32 * 3];
         var labelsData = new T[totalSamples * _numClasses];
 
+        bool nchw = _options.Layout == ImageTensorLayout.NCHW;
         for (int i = 0; i < totalSamples; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -95,7 +96,9 @@ public class Cifar100DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Ten
                     for (int c = 0; c < 3; c++)
                     {
                         int srcIdx = sampleOffset + 2 + c * 1024 + h * 32 + w;
-                        int dstIdx = featureOffset + (h * 32 + w) * 3 + c;
+                        int dstIdx = nchw
+                            ? featureOffset + c * 1024 + h * 32 + w
+                            : featureOffset + (h * 32 + w) * 3 + c;
                         double value = data[srcIdx];
                         if (_options.Normalize) value /= 255.0;
                         featuresData[dstIdx] = NumOps.FromDouble(value);
@@ -107,7 +110,10 @@ public class Cifar100DataLoader<T> : InputOutputDataLoaderBase<T, Tensor<T>, Ten
                 labelsData[i * _numClasses + label] = NumOps.One;
         }
 
-        LoadedFeatures = new Tensor<T>(featuresData, new[] { totalSamples, 32, 32, 3 });
+        int[] shape = nchw
+            ? new[] { totalSamples, 3, 32, 32 }
+            : new[] { totalSamples, 32, 32, 3 };
+        LoadedFeatures = new Tensor<T>(featuresData, shape);
         LoadedLabels = new Tensor<T>(labelsData, new[] { totalSamples, _numClasses });
         InitializeIndices(totalSamples);
     }
