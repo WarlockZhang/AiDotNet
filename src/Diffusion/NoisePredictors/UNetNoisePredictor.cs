@@ -430,20 +430,144 @@ public class UNetNoisePredictor<T> : NoisePredictorBase<T>
     }
 
 
+    /// <summary>
+    /// Per-instance compile cache for the UNet forward pass. Lazy-allocated
+    /// on first <see cref="PredictNoise"/> call when
+    /// <see cref="AiDotNet.Tensors.Engines.Optimization.TensorCodecOptions.EnableCompilation"/>
+    /// is on. Keyed by noisy-sample input shape — different shapes compile
+    /// different plans. Dropped when <see cref="ResetState"/> runs.
+    /// </summary>
+    private AiDotNet.Tensors.Engines.Compilation.CompiledModelCache<T>? _compiledInferenceCache;
+
     /// <inheritdoc />
     public override Tensor<T> PredictNoise(Tensor<T> noisySample, int timestep, Tensor<T>? conditioning = null)
     {
         _lastInput = noisySample;
 
-        // Compute timestep embedding
+        // Compute timestep embedding (already cached per-timestep in the base class).
         var timeEmbed = GetTimestepEmbedding(timestep);
         timeEmbed = ProjectTimeEmbedding(timeEmbed);
 
-        // Forward pass
-        var output = ForwardUNet(noisySample, timeEmbed, conditioning);
+        // Compiled fast path — only when TensorCodecOptions.EnableCompilation is on.
+        // First call traces the eager ForwardUNet and compiles the plan; subsequent
+        // calls at the same shape replay the compiled plan.
+        var output = PredictCompiledForward(noisySample, timeEmbed, conditioning);
 
         _lastOutput = output;
         return output;
+    }
+
+    /// <summary>
+    /// Eagerly compiles the UNet forward pass for the given sample input shape,
+    /// storing the plan in the per-instance cache. Addresses the
+    /// "UNetNoisePredictor compiled forward" checklist item on
+    /// github.com/ooples/AiDotNet#1015.
+    /// </summary>
+    /// <param name="sampleNoisy">Representative noisy-sample tensor whose shape keys the plan.</param>
+    /// <param name="sampleTimestep">Timestep used for tracing. Any valid integer works — the plan's replay uses whichever timestep <see cref="PredictNoise"/> is called with.</param>
+    /// <param name="conditioning">Optional conditioning tensor of the shape production will use.</param>
+    /// <returns><c>true</c> when a compiled plan is cached; <c>false</c> when compilation is disabled or tracing throws.</returns>
+    /// <remarks>
+    /// Call this at startup with a representative input shape to avoid the
+    /// one-time trace+compile cost hitting the first real inference. Multiple
+    /// calls with different shapes pre-warm multiple plans in the same cache.
+    /// </remarks>
+    public bool CompileForward(Tensor<T> sampleNoisy, int sampleTimestep = 0, Tensor<T>? conditioning = null)
+    {
+        if (sampleNoisy is null)
+            throw new ArgumentNullException(nameof(sampleNoisy));
+        if (!AiDotNet.Tensors.Engines.Optimization.TensorCodecOptions.Current.EnableCompilation)
+            return false;
+
+        try
+        {
+            var timeEmbed = GetTimestepEmbedding(sampleTimestep);
+            timeEmbed = ProjectTimeEmbedding(timeEmbed);
+
+            var cache = _compiledInferenceCache ??= new AiDotNet.Tensors.Engines.Compilation.CompiledModelCache<T>();
+            // Key includes conditioning presence so null-vs-present paths
+            // don't share plans (different traced graphs).
+            var key = BuildCompileKey(sampleNoisy, conditioning);
+            var plan = cache.GetOrCompileInference(
+                key,
+                () => ForwardUNet(sampleNoisy, timeEmbed, conditioning));
+            // Execute once to validate the plan replays correctly and warm
+            // workspace buffers. Dispose the output to avoid leaking the
+            // pooled tensor allocation from the warm-up.
+            var warmupOutput = plan.Execute();
+            if (warmupOutput is IDisposable disposableOutput)
+                disposableOutput.Dispose();
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is not OutOfMemoryException &&
+            ex is not StackOverflowException &&
+            ex is not AccessViolationException)
+        {
+            System.Diagnostics.Trace.TraceWarning(
+                $"UNetNoisePredictor.CompileForward failed for shape [{string.Join(",", sampleNoisy._shape)}]: " +
+                $"{ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Internal: dispatches to the compiled plan when available + enabled,
+    /// falling back to eager <see cref="ForwardUNet"/> otherwise. Mirrors
+    /// <see cref="AiDotNet.NeuralNetworks.NeuralNetworkBase{T}.PredictCompiled"/>.
+    /// </summary>
+    private Tensor<T> PredictCompiledForward(Tensor<T> noisySample, Tensor<T> timeEmbed, Tensor<T>? conditioning)
+    {
+        if (!AiDotNet.Tensors.Engines.Optimization.TensorCodecOptions.Current.EnableCompilation)
+            return ForwardUNet(noisySample, timeEmbed, conditioning);
+
+        try
+        {
+            var cache = _compiledInferenceCache ??= new AiDotNet.Tensors.Engines.Compilation.CompiledModelCache<T>();
+            // Key includes conditioning presence so null-vs-present paths
+            // don't share plans (different traced graphs).
+            var key = BuildCompileKey(noisySample, conditioning);
+            var plan = cache.GetOrCompileInference(
+                key,
+                () => ForwardUNet(noisySample, timeEmbed, conditioning));
+            return plan.Execute();
+        }
+        catch (Exception ex) when (
+            ex is not OutOfMemoryException &&
+            ex is not StackOverflowException &&
+            ex is not AccessViolationException)
+        {
+            System.Diagnostics.Trace.TraceWarning(
+                $"UNetNoisePredictor.PredictCompiledForward fallback: " +
+                $"{ex.GetType().Name}: {ex.Message}");
+            return ForwardUNet(noisySample, timeEmbed, conditioning);
+        }
+    }
+
+    /// <summary>
+    /// Builds a composite cache key that includes BOTH the noisy-sample
+    /// shape AND the conditioning shape (or a sentinel for null). This
+    /// prevents a plan traced with conditioning=null from being replayed
+    /// with a conditioning tensor (different graph) or vice versa.
+    /// </summary>
+    private static int[] BuildCompileKey(Tensor<T> noisySample, Tensor<T>? conditioning)
+    {
+        var inputShape = noisySample._shape;
+        if (conditioning is null)
+        {
+            // Append a single -1 sentinel so "no conditioning" has a
+            // distinct key from any real conditioning shape.
+            var key = new int[inputShape.Length + 1];
+            Array.Copy(inputShape, key, inputShape.Length);
+            key[^1] = -1;
+            return key;
+        }
+        var condShape = conditioning._shape;
+        var compositeKey = new int[inputShape.Length + 1 + condShape.Length];
+        Array.Copy(inputShape, 0, compositeKey, 0, inputShape.Length);
+        compositeKey[inputShape.Length] = -1; // separator
+        Array.Copy(condShape, 0, compositeKey, inputShape.Length + 1, condShape.Length);
+        return compositeKey;
     }
 
     /// <inheritdoc />

@@ -3,6 +3,7 @@ using BenchmarkDotNet.Jobs;
 using AiDotNet.Tensors.LinearAlgebra;
 using AiDotNet.Tensors.Engines;
 using AiDotNet.Tensors.Helpers;
+using AiDotNet.Diffusion.NoisePredictors;
 
 namespace AiDotNet.Benchmarks;
 
@@ -15,7 +16,7 @@ namespace AiDotNet.Benchmarks;
 [RankColumn]
 public class MemoryBenchmarks
 {
-    private readonly IEngine _engine = AiDotNetEngine.GetEngine();
+    private readonly IEngine _engine = AiDotNetEngine.Current;
 
     // Immutable inputs — never modified by benchmarks
     private Tensor<double> _inputA = null!;
@@ -47,8 +48,11 @@ public class MemoryBenchmarks
     [IterationSetup]
     public void IterationSetup()
     {
-        // Reset scratch tensor before each iteration so in-place ops don't accumulate
-        _inputA.Data.Span.CopyTo(_scratchA.Data.Span);
+        // Reset scratch tensor before each iteration so in-place ops don't accumulate.
+        // AsWritableSpan is internal on Tensor<T>, so use TensorAdd with an implicit
+        // zero: actually fastest to materialize through AsSpan() + indexer.
+        var srcSpan = _inputA.AsSpan();
+        for (int i = 0; i < srcSpan.Length; i++) _scratchA[i] = srcSpan[i];
     }
 
     [Benchmark(Description = "TensorAdd (allocating)")]
@@ -67,21 +71,20 @@ public class MemoryBenchmarks
     public Tensor<double> Alloc_NewTensor()
         => new([1, 256, 16, 16]);
 
-    [Benchmark(Description = "TensorAllocator.Rent+Return cycle ([1,256,16,16])")]
-    public void Alloc_Rent()
+    [Benchmark(Description = "TensorAllocator.Rent ([1,256,16,16])")]
+    public Tensor<double> Alloc_Rent()
     {
-        var t = TensorAllocator.Rent<double>([1, 256, 16, 16]);
-        // Use the tensor (prevent dead code elimination)
-        _ = t.Length;
-        TensorAllocator.Return(t);
+        // Rent returns a pre-zeroed tensor from the shared pool. No explicit
+        // Return — pool reuse happens via GC + finalizer on Tensors v0.38+.
+        return TensorAllocator.Rent<double>([1, 256, 16, 16]);
     }
 
-    [Benchmark(Description = "TensorAllocator.RentUninitialized+Return cycle ([1,256,16,16])")]
-    public void Alloc_RentUninitialized()
+    [Benchmark(Description = "TensorAllocator.RentUninitialized ([1,256,16,16])")]
+    public Tensor<double> Alloc_RentUninitialized()
     {
-        var t = TensorAllocator.RentUninitialized<double>([1, 256, 16, 16]);
-        _ = t.Length;
-        TensorAllocator.Return(t);
+        // RentUninitialized skips zeroing — faster when the caller will
+        // overwrite every element anyway.
+        return TensorAllocator.RentUninitialized<double>([1, 256, 16, 16]);
     }
 
     [Benchmark(Description = "Conv2D 256ch 16x16 (allocating)")]
@@ -99,4 +102,51 @@ public class MemoryBenchmarks
     [Benchmark(Description = "SigmoidInto (zero-alloc)")]
     public void Sigmoid_Into()
         => _engine.SigmoidInto(_dest, _inputA);
+
+    // =====================================================
+    // 50-step Predict loop — measures peak allocation, GC pauses, and
+    // total allocation bytes across a full denoising trajectory.
+    // Per github.com/ooples/AiDotNet#1015 "Memory benchmark" checklist item.
+    // =====================================================
+
+    private UNetNoisePredictor<double>? _predictStepUnet;
+    private Tensor<double>? _predictStepInput;
+
+    [GlobalSetup(Target = nameof(UNet_50StepPredictLoop))]
+    public void SetupPredictLoop()
+    {
+        // Small UNet scale — 50 sequential Predict calls on production-sized
+        // weights would hit 45-min CI budget. The point of this benchmark is
+        // to observe steady-state allocation behavior across the loop, not
+        // stress-test throughput.
+        _predictStepUnet = new UNetNoisePredictor<double>(
+            inputChannels: 4, outputChannels: 4,
+            baseChannels: 64, channelMultipliers: [1, 2, 4],
+            numResBlocks: 1, attentionResolutions: [1, 2],
+            contextDim: 0, numHeads: 4, inputHeight: 8, seed: 42);
+        _predictStepInput = new Tensor<double>([1, 4, 8, 8]);
+        for (int i = 0; i < _predictStepInput.Length; i++)
+            _predictStepInput[i] = (double)i / _predictStepInput.Length;
+    }
+
+    /// <summary>
+    /// Runs 50 sequential <c>PredictNoise</c> calls — one per denoising step —
+    /// matching the typical DDIM sampler count. BenchmarkDotNet's
+    /// <c>[MemoryDiagnoser]</c> tracks peak allocation, GC pauses, and
+    /// total allocation bytes.
+    /// </summary>
+    [Benchmark(Description = "UNet 50-step Predict loop (peak alloc, GC pauses)")]
+    public Tensor<double>? UNet_50StepPredictLoop()
+    {
+        if (_predictStepUnet is null || _predictStepInput is null) return null;
+        Tensor<double>? output = null;
+        // 50 DDIM steps — timesteps descend linearly from 1000→0 in
+        // production; we use a simple int pattern to avoid per-call overhead
+        // unrelated to the memory question.
+        for (int step = 1000; step > 0; step -= 20)
+        {
+            output = _predictStepUnet.PredictNoise(_predictStepInput, step, null);
+        }
+        return output;
+    }
 }
