@@ -4839,6 +4839,48 @@ public partial class AiModelBuilder<T, TInput, TOutput> : IAiModelBuilder<T, TIn
     }
 
     /// <summary>
+    /// Controls whether GPU backend diagnostic output is written to
+    /// <see cref="System.Console"/> or routed through a custom sink.
+    /// Addresses all three controls from github.com/ooples/AiDotNet#1122.
+    /// </summary>
+    /// <remarks>
+    /// Forwards to <see cref="AiDotNet.Configuration.GpuDiagnosticsConfig"/>
+    /// which in turn forwards to the underlying Tensors-package flag. The
+    /// settings are process-global — setting here affects every AiDotNet
+    /// call in the process. <see cref="AiDotNet.Configuration.GpuDiagnosticsOptions.Level"/>
+    /// takes precedence over <see cref="AiDotNet.Configuration.GpuDiagnosticsOptions.Verbose"/>
+    /// when both are set.
+    /// </remarks>
+    /// <param name="options">
+    /// The GPU-diagnostics options, or <c>null</c> to leave all current
+    /// settings unchanged. Each options property is nullable and only
+    /// applied when non-null (preserve semantics).
+    /// </param>
+    /// <returns>The builder instance for method chaining.</returns>
+    public IAiModelBuilder<T, TInput, TOutput> ConfigureGpuDiagnostics(
+        AiDotNet.Configuration.GpuDiagnosticsOptions? options = null)
+    {
+        if (options is null) return this;
+
+        // Level wins over Verbose when both set — Level is the richer API.
+        if (options.Level is AiDotNet.Configuration.GpuDiagnosticLevel level)
+        {
+            AiDotNet.Configuration.GpuDiagnosticsConfig.Level = level;
+        }
+        else if (options.Verbose is bool verbose)
+        {
+            AiDotNet.Configuration.GpuDiagnosticsConfig.Verbose = verbose;
+        }
+
+        if (options.Sink is AiDotNet.Configuration.GpuDiagnosticSink sink)
+        {
+            AiDotNet.Configuration.GpuDiagnosticsConfig.Sink = sink;
+        }
+
+        return this;
+    }
+
+    /// <summary>
     /// Configures benchmarking to run standardized benchmark suites and attach a structured report to the built model.
     /// </summary>
     /// <param name="options">Benchmarking options (suites, sampling, failure policy). If null, sensible defaults are used.</param>
