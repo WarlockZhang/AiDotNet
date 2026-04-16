@@ -2103,35 +2103,29 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     }
 
     /// <summary>
-    /// Compiled inference cache — auto-compiles forward pass on first call,
-    /// replays compiled plan on subsequent calls. Per-instance to prevent
-    /// cross-model cache hits (different models produce different graphs).
+    /// Composable inference-compilation helper — traces the forward pass on first
+    /// call at each input shape and replays the compiled plan on subsequent calls.
+    /// Falls back to eager execution on failure. Invalidated automatically when
+    /// <see cref="_layerStructureVersion"/> changes (lazy-init resize, layer
+    /// mutation, weight swap).
     /// </summary>
-    private AiDotNet.Tensors.Engines.Compilation.CompiledModelCache<T>? _compiledInferenceCache;
+    /// <remarks>
+    /// Single attachment point for future compilation features: AOT plan
+    /// serialization, CUDA Graph capture, symbolic shape plans, persistent
+    /// autotune. All of those attach to <see cref="CompiledModelHost{T}"/>
+    /// rather than re-implementing the compile+cache+fallback dance per
+    /// model family.
+    /// </remarks>
+    private readonly CompiledModelHost<T> _compileHost = new();
 
     /// <summary>
     /// Executes the forward pass using a compiled plan for maximum performance.
     /// First call traces and compiles; subsequent calls replay the compiled plan.
-    /// Falls back to eager execution if compilation fails.
+    /// Falls back to eager execution if compilation fails. Plans auto-invalidate
+    /// when <see cref="_layerStructureVersion"/> changes.
     /// </summary>
-    protected Tensor<T> PredictCompiled(Tensor<T> input)
-    {
-        if (!AiDotNet.Tensors.Engines.Optimization.TensorCodecOptions.Current.EnableCompilation)
-            return PredictEager(input);
-
-        try
-        {
-            var cache = _compiledInferenceCache ??= new AiDotNet.Tensors.Engines.Compilation.CompiledModelCache<T>();
-            var plan = cache.GetOrCompileInference(
-                (int[])input._shape.Clone(),
-                () => PredictEager(input)); // Use same path as eager for consistency
-            return plan.Execute();
-        }
-        catch
-        {
-            return PredictEager(input);
-        }
-    }
+    protected Tensor<T> PredictCompiled(Tensor<T> input) =>
+        _compileHost.Predict(input, _layerStructureVersion, () => PredictEager(input));
 
     /// <summary>
     /// Eager forward pass through all layers. Used as fallback when compilation fails.
@@ -4188,6 +4182,18 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             layer.SetParameters(layerParameters);
             currentIndex += layerParameterCount;
         }
+
+        // Some ITrainableLayer implementations swap their parameter tensors
+        // wholesale during SetParameters rather than mutating in place. When
+        // they do, any compiled plan captured against the prior tensor
+        // references is stale — replay would write into freed buffers. Drop
+        // BOTH the inference compile cache AND the tape-training caches that
+        // also key off the captured tensor references (TapeTrainingStep's
+        // collected-parameter cache + CompiledTapeTrainingStep's compiled
+        // plans). Without invalidating the tape side, the next training step
+        // would replay against parameters that no longer exist.
+        _compileHost.Invalidate();
+        Training.TapeTrainingStep<T>.InvalidateCache();
     }
 
     /// <summary>
@@ -4585,7 +4591,35 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     {
         if (disposing)
         {
-            // Dispose managed resources
+            // Release compiled plans first so pooled tensor buffers the plans
+            // captured are freed before layers Dispose and return their weights.
+            _compileHost.Dispose();
+
+            // Cascade Dispose into every layer that owns releasable state
+            // (pool-rented weight tensors, GPU handles, native buffers).
+            //
+            // Shared-layer graphs can cause the same ILayer instance to
+            // appear in multiple networks (or multiple times in one graph).
+            // Relying on ObjectDisposedException is NOT safe — many layer
+            // Dispose implementations are not idempotent (e.g., DenseLayer
+            // returns rented tensors to TensorAllocator with no guard) and
+            // a second Dispose would silently double-return pooled buffers.
+            //
+            // Route each layer through DisposeOnceGuard so the same instance
+            // is disposed at most once process-wide, regardless of how many
+            // owners cascade into it.
+            foreach (var layer in _layers)
+            {
+                if (layer is IDisposable disposable)
+                {
+                    AiDotNet.Helpers.DisposeOnceGuard.TryDispose(disposable);
+                }
+            }
+
+            // Release activation pool / gradient checkpoint state before
+            // mixed-precision teardown — the memory manager may hold pooled
+            // buffers that mixed-precision teardown wants to recycle.
+            DisableMemoryManagement();
             DisableMixedPrecision();
         }
     }
