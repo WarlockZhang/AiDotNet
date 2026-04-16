@@ -1389,16 +1389,18 @@ public interface IAiModelBuilder<T, TInput, TOutput>
     IAiModelBuilder<T, TInput, TOutput> ConfigureInferenceOptimizations(AiDotNet.Configuration.InferenceOptimizationConfig? config = null);
 
     /// <summary>
-    /// Opts out of the builder's deterministic-by-default policy. By default
-    /// <see cref="BuildAsync"/> forces bitwise-reproducible kernels on the engine.
-    /// Call this to let the engine pick the fastest available kernels even if
-    /// that introduces cross-run floating-point variance.
+    /// Enables JIT (Just-In-Time) compilation for the built model's forward-pass
+    /// replay.
+    /// </summary>
+    /// <param name="config">JIT config. <c>null</c> uses library defaults.</param>
+    /// <returns>This builder for fluent chaining.</returns>
+    IAiModelBuilder<T, TInput, TOutput> ConfigureJitCompilation(
+        AiDotNet.Configuration.JitCompilationConfig? config = null);
+
+    /// <summary>
+    /// Opts out of the builder's deterministic-by-default policy.
     /// </summary>
     /// <returns>This builder for fluent chaining.</returns>
-    /// <remarks>
-    /// Do not call this in production serving where reproducibility matters for
-    /// debugging, regression tests, or regulatory compliance.
-    /// </remarks>
     IAiModelBuilder<T, TInput, TOutput> AllowNondeterminism();
 
     /// <summary>
