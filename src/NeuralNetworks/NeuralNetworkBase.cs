@@ -2601,10 +2601,22 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
         if (TryTrainWithFusedOptimizer(input, expected, resolvedOptimizer))
             return;
 
-        // Initialize parameter buffer — replaces layer tensors with buffer-backed views.
-        // try/finally MUST cover this so views are restored even if setup throws.
-        var initialParams = Training.TapeTrainingStep<T>.CollectParameters(Layers, _parameterBuffer is null ? -1 : _layerStructureVersion);
-        var paramBuffer = GetOrCreateParameterBuffer(initialParams);
+        // The parameter walk here exists only to size the buffer on first Train()
+        // call. On every subsequent call the buffer is already the right size, and
+        // GetOrCreateParameterBuffer short-circuits to return it. Skipping the
+        // pre-swap walk in the steady state saves a full recursive layer traversal
+        // per Train() call — non-trivial on DiT-XL with 28 transformer blocks × the
+        // sub-layers in each. Only walk when we actually need sizing info.
+        ParameterBuffer<T>? paramBuffer;
+        if (_parameterBuffer is null)
+        {
+            var initialParams = Training.TapeTrainingStep<T>.CollectParameters(Layers, structureVersion: -1);
+            paramBuffer = GetOrCreateParameterBuffer(initialParams);
+        }
+        else
+        {
+            paramBuffer = _parameterBuffer;
+        }
 
         try
         {
@@ -4769,6 +4781,28 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             // buffers that mixed-precision teardown wants to recycle.
             DisableMemoryManagement();
             DisableMixedPrecision();
+
+            // Cascade to child layers. Guard against null because Layers may not be
+            // populated on a partially-constructed network (e.g., if a ctor threw
+            // before InitializeLayers ran).
+            if (Layers is not null)
+            {
+                foreach (var layer in Layers)
+                {
+                    if (layer is IDisposable disposable)
+                    {
+                        try
+                        {
+                            disposable.Dispose();
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            // A layer shared between networks may have been disposed
+                            // already — not a bug, don't let it abort the cascade.
+                        }
+                    }
+                }
+            }
         }
     }
 

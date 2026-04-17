@@ -737,6 +737,7 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
 
         // Mark as initialized so EnsureInitialized() doesn't re-randomize the
         // just-deserialized weights on the next Forward/GetParameters call.
+        // Also ensures Dispose returns the rented _kernels to TensorAllocator.
         _isInitialized = true;
     }
 
@@ -1497,6 +1498,16 @@ public partial class ConvolutionalLayer<T> : LayerBase<T>
             if (_kernels.Length > 0)
             {
                 TensorAllocator.Return(_kernels);
+            }
+
+            // Return the rented forward-pass output buffer. Without this,
+            // disposing many ConvolutionalLayer instances (one per conv in
+            // a deep UNet) leaks one rented activation per layer to the pool
+            // free list — dozens of MB per disposed model at SD scale.
+            if (_preAllocatedOutput is not null)
+            {
+                TensorAllocator.Return(_preAllocatedOutput);
+                _preAllocatedOutput = null;
             }
 
             // Clear other managed resources (CPU)

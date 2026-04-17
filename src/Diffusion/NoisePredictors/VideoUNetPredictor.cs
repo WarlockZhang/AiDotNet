@@ -611,12 +611,32 @@ public class VideoUNetPredictor<T> : NoisePredictorBase<T>
             x = ApplyTemporalAttention(block.TemporalAttention, x);
         }
 
-        // Cross-attention with text conditioning
+        // Cross-attention with text conditioning: query=spatial features,
+        // key=value=conditioning (text embedding). Cast to LayerBase to
+        // access the params Forward(query, kv) overload — ILayer only
+        // exposes Forward(single input).
         if (block.CrossAttention != null && conditioning != null)
         {
+            // Cross-attention requires the LayerBase multi-input Forward(query, kv)
+            // overload to receive the conditioning as the key/value tensor. The
+            // ILayer<T> interface only exposes single-input Forward. If a caller
+            // substitutes a non-LayerBase implementation, fail loudly rather than
+            // silently degrading to self-attention — losing text conditioning in
+            // production would be a catastrophic correctness regression that's
+            // hard to debug from outputs alone.
+            if (block.CrossAttention is not LayerBase<T> crossAttnBase)
+            {
+                throw new InvalidOperationException(
+                    $"CrossAttention layer must derive from LayerBase<{typeof(T).Name}> " +
+                    $"to support multi-input Forward(query, keyValue). " +
+                    $"Got {block.CrossAttention.GetType().FullName}. " +
+                    $"Substituting a single-input layer would silently drop the text " +
+                    $"conditioning tensor and produce wrong outputs.");
+            }
+
             x = isVideo
-                ? ProcessVideoFrames(x, frame => block.CrossAttention.Forward(frame))
-                : block.CrossAttention.Forward(x);
+                ? ProcessVideoFrames(x, frame => crossAttnBase.Forward(frame, conditioning))
+                : crossAttnBase.Forward(x, conditioning);
         }
 
         return x;
@@ -1074,11 +1094,13 @@ public class VideoUNetPredictor<T> : NoisePredictorBase<T>
 
     private ILayer<T> CreateUpsample(int channels, int level)
     {
-        // Decoder level N has input resolution _inputHeight >> (level+1)
         // (output of the corresponding encoder downsample) and upsamples to
         // _inputHeight >> level (the paired encoder-level resolution).
+        // Transposed convolution: stride=2, kernel=4, padding=1 ⇒ output = 2 * input.
+        // Note: ResolutionAtLevel uses _inputHeight; non-square inputs
+        // (_inputHeight != _inputWidth) would produce incorrect attention
+        // sequence lengths — documented on the constructor's inputHeight param.
         int inputRes = ResolutionAtLevel(level + 1);
-        // Transposed convolution: stride=2, kernel=4, padding=1 ⇒ output = 2 * input
         return new DeconvolutionalLayer<T>(
             inputShape: new[] { 1, channels, inputRes, inputRes },
             outputDepth: channels,
