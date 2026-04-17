@@ -188,10 +188,7 @@ public partial class AiModelBuilder<T, TInput, TOutput> : IAiModelBuilder<T, TIn
 
     /// <summary>
     /// When <c>true</c>, <see cref="BuildAsync"/> does NOT force deterministic
-    /// math on the engine. Default <c>false</c> — the builder makes the model
-    /// deterministic-by-default (matches bitwise across runs) and users opt out
-    /// via <see cref="AllowNondeterminism"/> for throughput gains on workloads
-    /// where reproducibility doesn't matter.
+    /// math on the engine.
     /// </summary>
     private bool _allowNondeterminism;
     private RLTrainingOptions<T>? _rlOptions;
@@ -1159,6 +1156,29 @@ public partial class AiModelBuilder<T, TInput, TOutput> : IAiModelBuilder<T, TIn
     public Task<AiModelResult<T, TInput, TOutput>> BuildAsync() => BuildAsync(CancellationToken.None);
 
     /// <summary>
+    /// Pushes the configured gradient-checkpointing segment size onto the
+    /// current model. Called from <c>BuildAsync</c> at the top of the build
+    /// flow AND after any code path that reassigns <c>_model</c> (e.g., the
+    /// AutoML path that selects the best candidate).
+    /// </summary>
+    private void ApplyGradientCheckpointingFromMemoryConfig()
+    {
+        if (_model is not NeuralNetworks.NeuralNetworkBase<T> checkpointingTarget)
+            return;
+
+        int effective = 0; // default: disabled
+        if (_memoryConfig is { UseGradientCheckpointing: true } memCfg)
+        {
+            int layerCount = checkpointingTarget.Layers.Count;
+            effective = memCfg.CheckpointEveryNLayers > 0
+                ? memCfg.CheckpointEveryNLayers
+                : Math.Max(1, (int)Math.Sqrt(Math.Max(1, layerCount)));
+        }
+
+        checkpointingTarget.SetGradientCheckpointingSegmentSize(effective);
+    }
+
+    /// <summary>
     /// Wraps a trained model's <c>Predict</c> in a <c>CompiledModelCache</c>-backed
     /// function matching the <c>JitCompiledFunction</c> shape expected by
     /// <see cref="AiModelResult{T, TInput, TOutput}"/>.
@@ -1302,15 +1322,19 @@ public partial class AiModelBuilder<T, TInput, TOutput> : IAiModelBuilder<T, TIn
         // validate during serialize/deserialize operations within BuildAsync.
         using var licenseScope = Helpers.ModelPersistenceGuard.SetActiveLicenseKey(_licenseKey);
 
+        // Apply gradient checkpointing to the model BEFORE any training runs.
+        // The helper reads _memoryConfig and writes O(sqrt(N)) segment size
+        // into the NeuralNetworkBase's lazy checkpointing field. Re-applied
+        // after any code path that reassigns _model (e.g., AutoML).
+        ApplyGradientCheckpointingFromMemoryConfig();
+
         // Apply JIT compilation config so every subsequent step in BuildAsync
         // sees the configured TensorCodecOptions. CompiledModelCache engages
         // automatically when Enabled=true; Enabled=false short-circuits to eager.
         _jitCompilationConfig?.ApplyToTensorCodec();
 
-        // Deterministic-by-default: force bitwise-reproducible kernels unless the
-        // caller opted out via AllowNondeterminism(). Applied BEFORE training +
-        // quantization + JIT compile, so every subsequent SYNCHRONOUS step
-        // records into the same deterministic kernel universe.
+        // Deterministic-by-default: force bitwise-reproducible kernels unless
+        // the caller opted out via AllowNondeterminism().
         AiDotNet.Tensors.Engines.AiDotNetEngine.SetDeterministicMode(!_allowNondeterminism);
 
         // Validate RAG pipeline composition if any RAG components were configured
@@ -2040,6 +2064,11 @@ public partial class AiModelBuilder<T, TInput, TOutput> : IAiModelBuilder<T, TIn
                 CancellationToken.None);
 
             _model = bestModel;
+            // Re-apply checkpointing config now that AutoML has selected the
+            // model — the BuildAsync entry-point applied it once against the
+            // pre-AutoML _model (often null), so the AutoML-chosen model would
+            // otherwise miss the user's UseGradientCheckpointing=true setting.
+            ApplyGradientCheckpointingFromMemoryConfig();
 
             var searchEndedUtc = DateTimeOffset.UtcNow;
             autoMLSummary = CreateAutoMLRunSummary(searchStartedUtc, searchEndedUtc);

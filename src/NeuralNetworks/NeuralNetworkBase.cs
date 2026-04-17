@@ -2109,6 +2109,72 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     /// <inheritdoc />
     public virtual Tensor<T> ForwardForTraining(Tensor<T> input)
     {
+        // Gradient checkpointing opt-in path. Unify on a single source of
+        // truth by consulting BOTH:
+        //   (a) the builder-set GradientCheckpointingSegmentSize (populated by
+        //       ConfigureMemoryManagement with UseGradientCheckpointing=true), and
+        //   (b) the existing _memoryManager (populated by the public
+        //       EnableMemoryManagement method for direct-model usage)
+        // If either path says checkpointing is active, use it — resolving the
+        // "two sources disagree" reviewer concern. Precedence: builder flag
+        // wins when both specify a segment size; the memory-manager fallback
+        // preserves behavior for users who configured via EnableMemoryManagement
+        // directly without touching the builder.
+        int segmentSize = GradientCheckpointingSegmentSize;
+        if (segmentSize <= 0 && _memoryManager is not null && _memoryManager.IsCheckpointingEnabled)
+        {
+            // Memory-manager-enabled but builder-set size is 0 → use the
+            // existing default heuristic based on sqrt(N), where N is the
+            // current layer count. sqrt(N) gives the optimal memory/compute
+            // tradeoff: ~sqrt(N) checkpoints with ~33% extra compute.
+            segmentSize = Math.Max(1, (int)Math.Sqrt(Math.Max(1, Layers.Count)));
+        }
+        if (segmentSize > 0 && Layers.Count > segmentSize)
+        {
+            // Cache the layer-forward delegate array so checkpointed training
+            // doesn't allocate N closures + a delegate array on every call.
+            // Rebuild only when the layer graph changes (structure version
+            // bump). Saves ~Layers.Count delegate allocations per training step.
+            if (_checkpointLayerFunctions is null
+                || _checkpointFunctionsVersion != _layerStructureVersion)
+            {
+                var fns = new Func<Tensor<T>, Tensor<T>>[Layers.Count];
+                for (int i = 0; i < Layers.Count; i++)
+                {
+                    // Use the method group directly so the delegate binds to the
+                    // layer instance's Forward method with no captured local —
+                    // no per-layer closure allocation. The delegate holds a
+                    // reference to the layer (its implicit Target) but no
+                    // extra heap closure is created.
+                    //
+                    // Training-mode correctness: SetTrainingMode(true) is called
+                    // by the caller (TrainWithTape) for the entire training step,
+                    // and layer.Forward reads IsTrainingMode internally to select
+                    // training-time behavior (e.g. Dropout applies masks, LayerNorm
+                    // uses batch stats). Since the mode flag is set ONCE per step
+                    // and stays true across both the original forward and the
+                    // checkpoint recomputation, both code paths see identical
+                    // training-time behavior for mode-aware layers.
+                    //
+                    // Note on stochastic/stateful layers: if a segment contains
+                    // Dropout or BatchNormalization, the recomputation during
+                    // backward generates a NEW dropout mask / updates the running
+                    // stats AGAIN. This is a known property of activation
+                    // checkpointing (identical to PyTorch's checkpoint without
+                    // preserve_rng_state) — callers who need bit-exact gradients
+                    // across recomputation should either disable checkpointing or
+                    // restrict it to segments without stochastic/stateful layers.
+                    // The checkpoint segment-size contract is unchanged; this is
+                    // documented behavior, not a bug in the delegate binding.
+                    fns[i] = Layers[i].Forward;
+                }
+                _checkpointLayerFunctions = fns;
+                _checkpointFunctionsVersion = _layerStructureVersion;
+            }
+            return AiDotNet.Tensors.Engines.Autodiff.GradientCheckpointing<T>.Checkpoint(
+                _checkpointLayerFunctions, input, segmentSize);
+        }
+
         var current = input;
         foreach (var layer in Layers)
         {
@@ -2118,11 +2184,26 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     }
 
     /// <summary>
+    /// Per-instance gradient-checkpointing segment size. 0 = disabled.
+    /// </summary>
+    internal int GradientCheckpointingSegmentSize { get; private set; }
+
+    private Func<Tensor<T>, Tensor<T>>[]? _checkpointLayerFunctions;
+    private int _checkpointFunctionsVersion = -1;
+
+    internal void SetGradientCheckpointingSegmentSize(int segmentSize)
+    {
+        if (segmentSize < 0)
+            throw new ArgumentOutOfRangeException(nameof(segmentSize),
+                "Segment size must be non-negative. Use 0 to disable checkpointing.");
+        GradientCheckpointingSegmentSize = segmentSize;
+    }
+
+    /// <summary>
     /// Composable inference-compilation helper — traces the forward pass on first
     /// call at each input shape and replays the compiled plan on subsequent calls.
     /// Falls back to eager execution on failure. Invalidated automatically when
-    /// <see cref="_layerStructureVersion"/> changes (lazy-init resize, layer
-    /// mutation, weight swap).
+    /// <see cref="_layerStructureVersion"/> changes.
     /// </summary>
     /// <remarks>
     /// Single attachment point for future compilation features: AOT plan
