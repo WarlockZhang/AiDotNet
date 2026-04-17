@@ -108,6 +108,16 @@ public class ImageTensorLayoutTests
         AssertShape(enumerator.Current.Features, 1, 3, 32, 32);
     }
 
+    // Regression tests for CIFAR-10 NHWC, CIFAR-100 NHWC, EuroSat NCHW,
+    // and the NHWC-vs-NCHW pixel-value parity checks were removed from
+    // this PR alongside reverting the suboptimal .Contiguous() loader
+    // fix. The correctness fix — along with these tests — will land in a
+    // follow-up PR once AiDotNet.Tensors#194 (Tensor<T>.CopyTo(Span<T>))
+    // merges and this repo bumps its Tensors package reference. At that
+    // point the loader fix becomes a single-line .CopyTo(dst) that does
+    // a strided-aware copy in one pass instead of materializing an
+    // intermediate contiguous tensor via .Contiguous().
+
     // --- FashionMNIST ---
 
     [SkippableFact]
