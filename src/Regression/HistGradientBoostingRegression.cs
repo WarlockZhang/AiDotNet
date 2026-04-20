@@ -700,9 +700,20 @@ public class HistGradientBoostingRegression<T> : ModelBase<T, Matrix<T>, Vector<
     /// </remarks>
     public override IFullModel<T, Matrix<T>, Vector<T>> DeepCopy()
     {
-        var copy = new HistGradientBoostingRegression<T>(_options);
-        copy.Deserialize(Serialize());
-        return copy;
+        // In-memory clone, not a user save/load — wrap in InternalOperation
+        // so the persistence guard does not treat this as a billable op.
+        //
+        // Options are cloned (not shared by reference) so the returned copy
+        // owns an independent options object. A shared _options reference
+        // would let mutations on the clone leak back into the original and
+        // break deep-copy isolation downstream (e.g., hyperparameter tuners
+        // that adjust a single model's options).
+        using (ModelPersistenceGuard.InternalOperation())
+        {
+            var copy = new HistGradientBoostingRegression<T>(_options.Clone());
+            copy.Deserialize(Serialize());
+            return copy;
+        }
     }
 
     /// <summary>

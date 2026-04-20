@@ -3465,6 +3465,17 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     public virtual byte[] Serialize()
     {
         ModelPersistenceGuard.EnforceBeforeSerialize();
+        return SerializeInternalUnchecked();
+    }
+
+    /// <summary>
+    /// Internal, non-virtual, no-guard serialization used by trusted framework
+    /// call sites such as <see cref="DeepCopy"/>. Users cannot call this and
+    /// cannot override it, so a malicious/careless subclass override of
+    /// <see cref="Serialize"/> cannot intercept this path.
+    /// </summary>
+    private byte[] SerializeInternalUnchecked()
+    {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms);
 
@@ -3550,6 +3561,16 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
             throw new ArgumentException("Serialized data cannot be empty.", nameof(data));
 
         ModelPersistenceGuard.EnforceBeforeDeserialize();
+        DeserializeInternalUnchecked(data);
+    }
+
+    /// <summary>
+    /// Internal, non-virtual, no-guard deserialization used by trusted
+    /// framework call sites such as <see cref="DeepCopy"/>. Users cannot
+    /// call this and cannot override it.
+    /// </summary>
+    private void DeserializeInternalUnchecked(byte[] data)
+    {
         using var ms = new MemoryStream(data);
         using var reader = new BinaryReader(ms);
 
@@ -3906,15 +3927,42 @@ public abstract class NeuralNetworkBase<T> : INeuralNetworkModel<T>, IInterpreta
     /// </remarks>
     public virtual IFullModel<T, Tensor<T>, Tensor<T>> DeepCopy()
     {
-        // The most reliable way to create a deep copy is through serialization/deserialization
-        byte[] serialized = Serialize();
-
-        // Create a new instance of the same type as this network
+        // DeepCopy is a training-internal in-memory clone, not a user-facing
+        // save/load. We route through the private SerializeInternalUnchecked /
+        // DeserializeInternalUnchecked helpers rather than the public virtual
+        // Serialize / Deserialize APIs. This has two consequences:
+        //
+        //   1. The ModelPersistenceGuard trial check (which lives on the
+        //      public Serialize/Deserialize entry points) is not invoked,
+        //      so in-memory clones during training do not consume trial
+        //      operations — consistent with the guard's own XML doc
+        //      ("Training and inference are never restricted.").
+        //
+        //   2. A subclass that overrides public Serialize() (whether to
+        //      customise the format or, hypothetically, to exfiltrate bytes)
+        //      cannot intercept this path. The private helpers are non-
+        //      virtual so DeepCopy's serialization contract is locked to the
+        //      base implementation.
+        //
+        // If you need to customise how DeepCopy behaves, override DeepCopy
+        // itself — that's the correct extension point.
+        byte[] serialized = SerializeInternalUnchecked();
         var copy = CreateNewInstance();
-
-        // Load the serialized data into the new instance
-        copy.Deserialize(serialized);
-
+        if (copy is NeuralNetworkBase<T> copyBase)
+        {
+            copyBase.DeserializeInternalUnchecked(serialized);
+        }
+        else
+        {
+            // Fallback for copies that aren't NeuralNetworkBase<T> — should
+            // not happen given CreateNewInstance contract, but keep the call
+            // graph safe. Use InternalOperation so the public Deserialize's
+            // guard is suppressed (equivalent pattern to SaveModel/LoadModel).
+            using (ModelPersistenceGuard.InternalOperation())
+            {
+                copy.Deserialize(serialized);
+            }
+        }
         return copy;
     }
 

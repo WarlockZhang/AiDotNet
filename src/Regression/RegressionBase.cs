@@ -1,5 +1,6 @@
 global using AiDotNet.Factories;
 using AiDotNet.Autodiff;
+using AiDotNet.Helpers;
 using Newtonsoft.Json;
 
 namespace AiDotNet.Regression;
@@ -294,6 +295,17 @@ public abstract class RegressionBase<T> : IRegression<T>, IConfigurableModel<T>,
     public virtual byte[] Serialize()
     {
         ModelPersistenceGuard.EnforceBeforeSerialize();
+        return SerializeInternalUnchecked();
+    }
+
+    /// <summary>
+    /// Internal, non-virtual, no-guard serialization used by trusted framework
+    /// call sites such as <see cref="DeepCopy"/>. Subclasses cannot override
+    /// this method, so a malicious or careless override of
+    /// <see cref="Serialize"/> cannot intercept the clone path.
+    /// </summary>
+    private byte[] SerializeInternalUnchecked()
+    {
         var modelData = new Dictionary<string, object>
         {
             { "Coefficients", Coefficients.ToArray() },
@@ -327,6 +339,17 @@ public abstract class RegressionBase<T> : IRegression<T>, IConfigurableModel<T>,
     public virtual void Deserialize(byte[] modelData)
     {
         ModelPersistenceGuard.EnforceBeforeDeserialize();
+        DeserializeInternalUnchecked(modelData);
+    }
+
+    /// <summary>
+    /// Internal, non-virtual, no-guard deserialization used by trusted framework
+    /// call sites such as <see cref="DeepCopy"/>. Subclasses cannot override
+    /// this method, so a malicious or careless override of
+    /// <see cref="Deserialize"/> cannot intercept the clone path.
+    /// </summary>
+    private void DeserializeInternalUnchecked(byte[] modelData)
+    {
         var jsonString = Encoding.UTF8.GetString(modelData);
         var modelMetadata = JsonConvert.DeserializeObject<ModelMetadata<T>>(jsonString);
 
@@ -830,16 +853,29 @@ public abstract class RegressionBase<T> : IRegression<T>, IConfigurableModel<T>,
     /// </remarks>
     public virtual IFullModel<T, Matrix<T>, Vector<T>> DeepCopy()
     {
-        // The most reliable way to create a deep copy is through serialization/deserialization
-        byte[] serialized = Serialize();
-
-        // Create a new instance of the same type as this network
-        var copy = CreateNewInstance();
-
-        // Load the serialized data into the new instance
-        copy.Deserialize(serialized);
-
-        return copy;
+        // In-memory clone, not a user save/load — wrap in InternalOperation
+        // so the persistence guard does not treat this as a billable op, AND
+        // route through the private non-virtual SerializeInternalUnchecked /
+        // DeserializeInternalUnchecked helpers so a subclass override of the
+        // public virtual Serialize / Deserialize methods cannot intercept the
+        // clone path (that was the subclass-override bypass surface #1163
+        // closes for NeuralNetworkBase, brought here too).
+        using (ModelPersistenceGuard.InternalOperation())
+        {
+            byte[] serialized = SerializeInternalUnchecked();
+            var copy = CreateNewInstance();
+            if (copy is RegressionBase<T> copyBase)
+            {
+                copyBase.DeserializeInternalUnchecked(serialized);
+            }
+            else
+            {
+                // Subclass factory returned a different base hierarchy (rare,
+                // but legal) — fall back to the public virtual path for those.
+                copy.Deserialize(serialized);
+            }
+            return copy;
+        }
     }
 
     /// <summary>

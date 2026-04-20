@@ -292,4 +292,54 @@ public class HistGradientBoostingOptions : ModelOptions
     /// </remarks>
     public int EarlyStoppingRounds { get; set; } = 10;
 
+    /// <summary>
+    /// Parameterless constructor used when options are built up via object
+    /// initializers. Kept so that <c>new HistGradientBoostingOptions { ... }</c>
+    /// continues to work alongside the copy constructor.
+    /// </summary>
+    public HistGradientBoostingOptions() { }
+
+    /// <summary>
+    /// Copy constructor. Copies every option — including inherited
+    /// <see cref="ModelOptions"/> members (e.g., <c>Seed</c>) — into this
+    /// instance. Used by <see cref="Clone"/> and by
+    /// <c>HistGradientBoostingRegression.DeepCopy</c> to guarantee the
+    /// clone starts from a byte-identical configuration; missing inherited
+    /// members would cause the clone to silently drift away from the
+    /// original (e.g., lose the reproducibility seed), which is a
+    /// data-loss bug even before deserialization restores the serialized
+    /// fields.
+    /// </summary>
+    /// <param name="other">The options instance to copy from. Must not be <see langword="null"/>.</param>
+    public HistGradientBoostingOptions(HistGradientBoostingOptions other)
+    {
+        if (other is null) throw new ArgumentNullException(nameof(other));
+
+        // Inherited ModelOptions state — must be copied explicitly because
+        // C# object initializers on a derived type do NOT touch base members.
+        Seed = other.Seed;
+
+        // Derived members
+        MaxBins = other.MaxBins;
+        NumberOfIterations = other.NumberOfIterations;
+        LearningRate = other.LearningRate;
+        MaxDepth = other.MaxDepth;
+        MaxLeafNodes = other.MaxLeafNodes;
+        MinSamplesLeaf = other.MinSamplesLeaf;
+        L2Regularization = other.L2Regularization;
+        MinGainToSplit = other.MinGainToSplit;
+        SubsampleRatio = other.SubsampleRatio;
+        ColsampleByTree = other.ColsampleByTree;
+        UseEarlyStopping = other.UseEarlyStopping;
+        EarlyStoppingRounds = other.EarlyStoppingRounds;
+    }
+
+    /// <summary>
+    /// Returns a deep copy of this options instance. Delegates to the copy
+    /// constructor so every configuration value — including inherited
+    /// <see cref="ModelOptions"/> state — is preserved. Used by
+    /// <c>HistGradientBoostingRegression.DeepCopy</c> to ensure the cloned
+    /// model owns an independent options object.
+    /// </summary>
+    public HistGradientBoostingOptions Clone() => new(this);
 }
