@@ -1,5 +1,37 @@
 ---
 import AdminLayout from '../../../layouts/AdminLayout.astro';
+
+// Single source of truth for the product list. Shared between:
+//   - the filter dropdown on the table
+//   - the Issue License modal's product selector
+//   - the client-side productBadge() helper (via the serialized version below)
+// Keep this aligned with the `license_product` Postgres enum in
+// website/supabase/migrations/20260419000000_add_product_to_license_keys.sql.
+// Adding a new product means editing this array + the enum migration, nothing else.
+interface ProductConfig {
+  value: string;
+  label: string;
+  prefix: string;
+  badgeClass: string;
+}
+const PRODUCTS: ProductConfig[] = [
+  {
+    value: 'aidotnet',
+    label: 'AiDotNet',
+    prefix: 'aidn',
+    badgeClass: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400',
+  },
+  {
+    value: 'harmonic_engine',
+    label: 'Harmonic Engine',
+    prefix: 'harm',
+    badgeClass: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400',
+  },
+];
+// Serialized JSON blob the client <script> picks up — lets the browser
+// render product badges and validate issue-form input against the same
+// list the Astro frontmatter used to render the dropdowns above.
+const productsJson = JSON.stringify(PRODUCTS);
 ---
 
 <AdminLayout title="License Management - AiDotNet Admin" description="Manage BSL license keys, view activations, and administer license tiers." activeTab="licenses">
@@ -38,6 +70,13 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
         />
       </div>
       <select
+        id="filter-product"
+        class="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-blue/50"
+      >
+        <option value="">All Products</option>
+        {PRODUCTS.map((p) => <option value={p.value}>{p.label}</option>)}
+      </select>
+      <select
         id="filter-tier"
         class="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-blue/50"
       >
@@ -68,6 +107,7 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
           <thead>
             <tr class="border-b border-slate-200 dark:border-slate-700">
               <th class="text-left py-3 px-4 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">License Key</th>
+              <th class="text-left py-3 px-4 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Product</th>
               <th class="text-left py-3 px-4 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Owner</th>
               <th class="text-left py-3 px-4 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Tier</th>
               <th class="text-left py-3 px-4 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
@@ -88,6 +128,25 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
       <div class="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6 w-full max-w-md shadow-xl">
         <h2 class="text-lg font-bold text-slate-900 dark:text-white mb-4">Issue New License</h2>
         <form id="issue-form" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Product</label>
+            <select
+              id="issue-product"
+              required
+              class="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-blue/50"
+            >
+              {/*
+                Empty disabled placeholder — the issuance flow is
+                multi-product so HTML `required` must actually force an
+                explicit choice. Without this option the browser would
+                auto-select PRODUCTS[0] (AiDotNet), and an admin who
+                misses this field would accidentally issue an AiDotNet
+                license instead of being told to pick one.
+              */}
+              <option value="" selected disabled>Select a product</option>
+              {PRODUCTS.map((p) => <option value={p.value}>{p.label}</option>)}
+            </select>
+          </div>
           <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">User Email</label>
             <input
@@ -173,6 +232,15 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
     </div>
   </div>
 
+  <!--
+    Serialized product list hand-off from the Astro frontmatter to the
+    browser-side script below. Using a data-attribute keeps the two-way
+    contract explicit (frontmatter defines, script consumes) and avoids
+    the `const PRODUCT_META = { ... }` duplication that previously had to
+    be maintained in lockstep with the HTML dropdown options.
+  -->
+  <div id="admin-licenses-config" data-products={productsJson} class="hidden"></div>
+
   <script>
     import { supabase } from '../../../lib/supabase';
 
@@ -180,6 +248,7 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
       id: string;
       user_id: string;
       license_key: string;
+      product: string;
       tier: string;
       status: string;
       max_activations: number;
@@ -192,6 +261,30 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
       ownerName?: string;
       activationCount?: number;
     }
+
+    // Product metadata: display label + license-key prefix. The prefix must
+    // match what the client library expects so that validation is O(1) based
+    // on the key string alone and doesn't need a DB round-trip just to
+    // classify product.
+    //
+    // Source of truth lives in the Astro frontmatter (the `PRODUCTS` array)
+    // so the HTML dropdowns and the client-side helpers never drift apart.
+    // We read the serialized JSON from the #admin-licenses-config element
+    // the Astro template rendered for us.
+    interface ClientProduct { value: string; label: string; prefix: string; badgeClass: string; }
+    const __configEl = document.getElementById('admin-licenses-config');
+    const __productList: ClientProduct[] = __configEl
+      ? JSON.parse(__configEl.getAttribute('data-products') || '[]')
+      : [];
+    const PRODUCT_META: Record<string, { label: string; prefix: string; badge: string }> = {};
+    for (const p of __productList) {
+      PRODUCT_META[p.value] = { label: p.label, prefix: p.prefix, badge: p.badgeClass };
+    }
+    // Fallback key used by productBadge() when a DB row surfaces an unknown
+    // product string (e.g., a new product added to the enum but not yet
+    // reflected in the admin UI config). The first entry in the list is the
+    // canonical "home" product — currently AiDotNet.
+    const FALLBACK_PRODUCT_KEY: string | undefined = __productList[0]?.value;
 
     interface Activation {
       id: string;
@@ -228,18 +321,22 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
     }
 
     async function loadLicenses() {
-      // Load profiles for name lookup
-      const profiles = await fetchAllPaginated<{ id: string; full_name: string }>('profiles', 'id, full_name', 'id');
+      // Load profiles for name lookup. Fall back through full_name -> email
+      // -> 'Unknown' so licenses issued to bot accounts (e.g. CI) that never
+      // set a display name still show a meaningful owner label instead of
+      // collapsing to 'Unknown'.
+      const profiles = await fetchAllPaginated<{ id: string; full_name: string | null; email: string | null }>('profiles', 'id, full_name, email', 'id');
 
       const nameMap = new Map<string, string>();
       for (const p of profiles) {
-        nameMap.set(p.id, p.full_name || 'Unknown');
+        const label = (p.full_name && p.full_name.trim()) || p.email || 'Unknown';
+        nameMap.set(p.id, label);
       }
 
       // Load all license keys
       let licenses: LicenseKey[];
       try {
-        licenses = await fetchAllPaginated<LicenseKey>('license_keys', 'id, user_id, license_key, tier, status, max_activations, organization_name, notes, stripe_subscription_id, issued_at, expires_at, created_at', 'created_at');
+        licenses = await fetchAllPaginated<LicenseKey>('license_keys', 'id, user_id, license_key, product, tier, status, max_activations, organization_name, notes, stripe_subscription_id, issued_at, expires_at, created_at', 'created_at');
       } catch (err) {
         const loading = document.getElementById('licenses-loading');
         if (loading) loading.innerHTML = '<p class="text-sm text-red-500">Failed to load licenses.</p>';
@@ -284,6 +381,7 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
 
     function applyFilters() {
       const search = (document.getElementById('search-input') as HTMLInputElement).value.toLowerCase().trim();
+      const productFilter = (document.getElementById('filter-product') as HTMLSelectElement).value;
       const tierFilter = (document.getElementById('filter-tier') as HTMLSelectElement).value;
       const statusFilter = (document.getElementById('filter-status') as HTMLSelectElement).value;
 
@@ -292,12 +390,41 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
           const haystack = `${l.license_key} ${l.ownerName || ''} ${l.organization_name || ''}`.toLowerCase();
           if (!haystack.includes(search)) return false;
         }
+        if (productFilter && l.product !== productFilter) return false;
         if (tierFilter && l.tier !== tierFilter) return false;
         if (statusFilter && l.status !== statusFilter) return false;
         return true;
       });
 
       renderTable();
+    }
+
+    // Tracks which unknown product values we've already warned about this
+    // page-load so a table with thousands of malformed rows doesn't spam the
+    // console with one warning per row.
+    const __warnedUnknownProducts = new Set<string>();
+
+    function productBadge(product: string): string {
+      const meta = PRODUCT_META[product];
+      if (meta) {
+        return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${meta.badge}">${escapeHtml(meta.label)}</span>`;
+      }
+      // Unknown or malformed product value. Surface a warning once per
+      // distinct value so admins notice data drift (new enum value in the
+      // DB that the admin panel hasn't been updated for, stray NULL, typo in
+      // a manual insert) instead of silently papering over it with the
+      // default badge. Render the raw value so the row stays scannable.
+      if (!__warnedUnknownProducts.has(product)) {
+        __warnedUnknownProducts.add(product);
+        console.warn(
+          `[admin/licenses] Unknown product value "${product}" — ` +
+          'check that the PRODUCTS list in index.astro matches the license_product enum.'
+        );
+      }
+      const fallbackMeta = FALLBACK_PRODUCT_KEY ? PRODUCT_META[FALLBACK_PRODUCT_KEY] : undefined;
+      const badgeClass = fallbackMeta?.badge ?? 'bg-slate-100 dark:bg-slate-700 text-slate-500';
+      const displayLabel = product ? `Unknown: ${product}` : 'Unknown';
+      return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${badgeClass}" title="Unrecognized product value — see console">${escapeHtml(displayLabel)}</span>`;
     }
 
     function tierBadge(tier: string): string {
@@ -329,7 +456,7 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
       if (!tbody) return;
 
       if (filteredLicenses.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">No licenses found</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9" class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">No licenses found</td></tr>`;
         return;
       }
 
@@ -360,6 +487,7 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
           <td class="py-3 px-4">
             <button class="activations-btn font-mono text-xs text-brand-blue hover:underline" data-id="${l.id}" title="View activations">${escapeHtml(keyPreview)}</button>
           </td>
+          <td class="py-3 px-4">${productBadge(l.product)}</td>
           <td class="py-3 px-4 text-slate-700 dark:text-slate-300">${escapeHtml(l.ownerName || 'Unknown')}${l.organization_name ? `<br><span class="text-xs text-slate-400">${escapeHtml(l.organization_name)}</span>` : ''}</td>
           <td class="py-3 px-4">${tierBadge(l.tier)}</td>
           <td class="py-3 px-4">${statusBadge(l.status)}</td>
@@ -535,10 +663,20 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
       const errorEl = document.getElementById('issue-error');
 
       const email = (document.getElementById('issue-email') as HTMLInputElement).value.trim();
+      const product = (document.getElementById('issue-product') as HTMLSelectElement).value;
       const tier = (document.getElementById('issue-tier') as HTMLSelectElement).value;
       const maxActivations = parseInt((document.getElementById('issue-max-activations') as HTMLInputElement).value);
       const org = (document.getElementById('issue-org') as HTMLInputElement).value.trim();
       const notes = (document.getElementById('issue-notes') as HTMLTextAreaElement).value.trim();
+
+      const productMeta = PRODUCT_META[product];
+      if (!productMeta) {
+        if (errorEl) {
+          errorEl.textContent = `Unknown product: ${product}`;
+          errorEl.classList.remove('hidden');
+        }
+        return;
+      }
 
       // Look up user by email
       const { data: profiles, error: profileError } = await supabase
@@ -557,16 +695,19 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
 
       const userId = profiles[0].id;
 
-      // Generate a license key (format: aidn.{random}.{random})
+      // Generate a license key: {productPrefix}.{random12}.{random16}.
+      // Product prefix (aidn / harm / ...) comes from PRODUCT_META so the
+      // client library can classify a key by prefix without a DB call.
       const keyPart1 = crypto.randomUUID().replace(/-/g, '').substring(0, 12);
       const keyPart2 = crypto.randomUUID().replace(/-/g, '').substring(0, 16);
-      const licenseKey = `aidn.${keyPart1}.${keyPart2}`;
+      const licenseKey = `${productMeta.prefix}.${keyPart1}.${keyPart2}`;
 
       const { error: insertError } = await supabase
         .from('license_keys')
         .insert({
           user_id: userId,
           license_key: licenseKey,
+          product: product,
           tier: tier,
           status: 'active',
           max_activations: maxActivations,
@@ -620,6 +761,7 @@ import AdminLayout from '../../../layouts/AdminLayout.astro';
 
     // Filter handlers
     document.getElementById('search-input')?.addEventListener('input', applyFilters);
+    document.getElementById('filter-product')?.addEventListener('change', applyFilters);
     document.getElementById('filter-tier')?.addEventListener('change', applyFilters);
     document.getElementById('filter-status')?.addEventListener('change', applyFilters);
 
