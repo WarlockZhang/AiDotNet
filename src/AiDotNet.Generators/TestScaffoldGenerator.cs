@@ -2362,9 +2362,20 @@ public class TestScaffoldGenerator : IIncrementalGenerator
         sb.AppendLine("// Auto-generated layer test. Invariant tests are inherited from LayerTestBase.");
         sb.AppendLine("using AiDotNet.Interfaces;");
         sb.AppendLine("using AiDotNet.Tests.ModelFamilyTests.Base;");
+        sb.AppendLine("using Xunit;");
         sb.AppendLine();
         sb.AppendLine("namespace AiDotNet.Tests.ModelFamilyTests.Generated;");
         sb.AppendLine();
+        // [Collection] serialises Serialize_Deserialize_ShouldPreserveBehavior
+        // (and every other fact on the base class) so BLAS-heavy recurrent/
+        // attention layers can't contend for CPU under xUnit's default parallel
+        // scheduler. The collection is defined in
+        // tests/AiDotNet.Tests/Fixtures/LayerSerializationCollection.cs;
+        // emitting the const reference (rather than a string literal) means a
+        // rename of LayerSerializationCollection.Name fails at test-assembly
+        // compile time if it drifts, instead of the old pattern of two
+        // strings-in-lockstep that could silently diverge. See issue #1166.
+        sb.AppendLine("[Collection(global::AiDotNet.Tests.Fixtures.LayerSerializationCollection.Name)]");
         sb.AppendLine($"public class {testClassName} : LayerTestBase");
         sb.AppendLine("{");
         sb.AppendLine($"    protected override ILayer<double> CreateLayer()");
@@ -2413,9 +2424,15 @@ public class TestScaffoldGenerator : IIncrementalGenerator
         sb.AppendLine("// Auto-generated dual-input layer test. Invariant tests are inherited from DualInputLayerTestBase.");
         sb.AppendLine("using AiDotNet.Interfaces;");
         sb.AppendLine("using AiDotNet.Tests.ModelFamilyTests.Base;");
+        sb.AppendLine("using Xunit;");
         sb.AppendLine();
         sb.AppendLine("namespace AiDotNet.Tests.ModelFamilyTests.Generated;");
         sb.AppendLine();
+        // See EmitLayerTestClass for the rationale on this Collection name.
+        // Use the const reference so a rename of LayerSerializationCollection.Name
+        // fails the test-assembly compile rather than silently drifting out of
+        // sync with the [CollectionDefinition] name — issue #1166 comment.
+        sb.AppendLine("[Collection(global::AiDotNet.Tests.Fixtures.LayerSerializationCollection.Name)]");
         sb.AppendLine($"public class {testClassName} : DualInputLayerTestBase");
         sb.AppendLine("{");
         sb.AppendLine($"    protected override ILayer<double> CreateLayer()");
@@ -2464,9 +2481,15 @@ public class TestScaffoldGenerator : IIncrementalGenerator
         sb.AppendLine("// Auto-generated multi-input layer test.");
         sb.AppendLine("using AiDotNet.Interfaces;");
         sb.AppendLine("using AiDotNet.Tests.ModelFamilyTests.Base;");
+        sb.AppendLine("using Xunit;");
         sb.AppendLine();
         sb.AppendLine("namespace AiDotNet.Tests.ModelFamilyTests.Generated;");
         sb.AppendLine();
+        // See EmitLayerTestClass for the rationale on this Collection name.
+        // Use the const reference so a rename of LayerSerializationCollection.Name
+        // fails the test-assembly compile rather than silently drifting out of
+        // sync with the [CollectionDefinition] name — issue #1166 comment.
+        sb.AppendLine("[Collection(global::AiDotNet.Tests.Fixtures.LayerSerializationCollection.Name)]");
         sb.AppendLine($"public class {testClassName} : MultiInputLayerTestBase");
         sb.AppendLine("{");
         sb.AppendLine($"    protected override ILayer<double> CreateLayer()");
@@ -2510,9 +2533,15 @@ public class TestScaffoldGenerator : IIncrementalGenerator
         sb.AppendLine("using AiDotNet.Interfaces;");
         sb.AppendLine("using AiDotNet.Tensors;");
         sb.AppendLine("using AiDotNet.Tests.ModelFamilyTests.Base;");
+        sb.AppendLine("using Xunit;");
         sb.AppendLine();
         sb.AppendLine("namespace AiDotNet.Tests.ModelFamilyTests.Generated;");
         sb.AppendLine();
+        // See EmitLayerTestClass for the rationale on this Collection name.
+        // Use the const reference so a rename of LayerSerializationCollection.Name
+        // fails the test-assembly compile rather than silently drifting out of
+        // sync with the [CollectionDefinition] name — issue #1166 comment.
+        sb.AppendLine("[Collection(global::AiDotNet.Tests.Fixtures.LayerSerializationCollection.Name)]");
         sb.AppendLine($"public class {testClassName} : GraphLayerTestBase");
         sb.AppendLine("{");
         sb.AppendLine($"    protected override ILayer<double> CreateLayer()");

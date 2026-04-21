@@ -265,15 +265,40 @@ public class ChronosBolt<T> : TimeSeriesFoundationModelBase<T>
         if (!_useNativeMode)
             throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
-        try
-        {
-            var output = ForwardNative(input);
-            LastLoss = _lossFunction.CalculateLoss(output.ToVector(), target.ToVector());
-            var gradient = _lossFunction.CalculateDerivative(output.ToVector(), target.ToVector());
-            _optimizer.UpdateParameters(Layers);
-        }
-        finally { SetTrainingMode(false); }
+        // Issue #1166: the old body computed a loss + gradient and then
+        // called _optimizer.UpdateParameters(Layers) without a backward
+        // pass, so every layer's UpdateParameters threw "Backward pass
+        // must be called before updating parameters." Delegate to
+        // FinancialModelBase.Train — it routes through the tape-based
+        // NeuralNetworkBase.TrainWithTape flow (GradientTape forward +
+        // tape.ComputeGradients + optimizer.Step) that every other
+        // NeuralNetworkBase subclass uses.
+        base.Train(input, target);
+    }
+
+    /// <summary>
+    /// Tape-aware training forward. Routes through the same native layer
+    /// stack <see cref="Predict"/> uses (ForwardNative) so the training
+    /// output shape matches the Predict output shape — namely the raw
+    /// [batch, horizon, numQuantiles] produced by the quantile head.
+    /// </summary>
+    /// <remarks>
+    /// The base <see cref="FinancialModelBase{T}.ForwardForTraining"/>
+    /// default delegates to <c>Forecast(input, quantiles: null)</c>, which
+    /// for ChronosBolt extracts the median slice ([_forecastHorizon]) and
+    /// drops every other quantile. Training target from
+    /// <see cref="Predict"/> is the full raw head output (e.g.
+    /// [1, horizon, numQuantiles] = [1, 8, 4096] at smoke-test scale) —
+    /// the two disagree and the MSE loss throws
+    /// "Tensor shapes must match. Got [4] and [1, 8, 4096]". Routing
+    /// through ForwardNative keeps the training forward shape aligned
+    /// with the target.
+    /// </remarks>
+    public override Tensor<T> ForwardForTraining(Tensor<T> input)
+    {
+        if (!_useNativeMode)
+            throw new InvalidOperationException("Training is only supported in native mode.");
+        return ForwardNative(input);
     }
 
     /// <inheritdoc/>

@@ -457,21 +457,18 @@ public class NBEATSFinance<T> : ForecastingModelBase<T>
         if (!_useNativeMode)
             throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
+        base.Train(input, target);
+    }
 
-        // Forward pass
-        var predictions = Forward(input);
-
-        // Compute loss
-        LastLoss = _lossFunction.CalculateLoss(predictions.ToVector(), target.ToVector());
-
-        // Backward pass
-        var gradient = _lossFunction.CalculateDerivative(predictions.ToVector(), target.ToVector());
-
-        // Update weights via optimizer
-        _optimizer.UpdateParameters(Layers);
-
-        SetTrainingMode(false);
+    /// <summary>
+    /// Training-mode forward: calls <see cref="Forward"/> directly so
+    /// block-level dropout in N-BEATS fully-connected stacks stays
+    /// active during backprop. Default path goes through
+    /// <c>ForecastNative</c>, which disables training-mode behavior.
+    /// </summary>
+    protected override Tensor<T> ForwardNativeForTraining(Tensor<T> input)
+    {
+        return Forward(input);
     }
 
     /// <inheritdoc/>

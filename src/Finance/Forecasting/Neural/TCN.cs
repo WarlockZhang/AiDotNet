@@ -473,16 +473,18 @@ public class TCN<T> : ForecastingModelBase<T>
         if (!_useNativeMode)
             throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
+        base.Train(input, target);
+    }
 
-        var predictions = Forward(input);
-        LastLoss = _lossFunction.CalculateLoss(predictions.ToVector(), target.ToVector());
-
-        var gradient = _lossFunction.CalculateDerivative(predictions.ToVector(), target.ToVector());
-
-        _optimizer.UpdateParameters(Layers);
-
-        SetTrainingMode(false);
+    /// <summary>
+    /// Training-mode forward: routes through <see cref="Forward"/>
+    /// directly so dropout between dilated conv blocks stays active
+    /// during backprop. The default path uses <c>ForecastNative</c>,
+    /// which flips the model to inference mode.
+    /// </summary>
+    protected override Tensor<T> ForwardNativeForTraining(Tensor<T> input)
+    {
+        return Forward(input);
     }
 
     /// <inheritdoc/>

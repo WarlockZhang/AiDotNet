@@ -514,27 +514,15 @@ public class Chronos<T> : TimeSeriesFoundationModelBase<T>
         if (!_useNativeMode)
             throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
-        try
-        {
-            // Tokenize input and run through the model
-            var tokenizedInput = Tokenize(input);
-            var logits = Forward(tokenizedInput);
-
-            // If target is already tokenized/logit-shaped (as in tests), use it directly.
-            // Otherwise, tokenize the target to match logits for training.
-            var targetTokens = target.Length == logits.Length ? target : Tokenize(target);
-
-            LastLoss = _lossFunction.CalculateLoss(logits.ToVector(), targetTokens.ToVector());
-
-            var gradient = _lossFunction.CalculateDerivative(logits.ToVector(), targetTokens.ToVector());
-
-            _optimizer.UpdateParameters(Layers);
-        }
-        finally
-        {
-            SetTrainingMode(false);
-        }
+        // Issue #1166: the old body computed a loss + gradient and then
+        // called _optimizer.UpdateParameters(Layers) without a backward
+        // pass, so every layer's UpdateParameters threw "Backward pass
+        // must be called before updating parameters." Delegate to
+        // FinancialModelBase.Train — it routes through the tape-based
+        // NeuralNetworkBase.TrainWithTape flow (GradientTape forward +
+        // tape.ComputeGradients + optimizer.Step) that every other
+        // NeuralNetworkBase subclass uses.
+        base.Train(input, target);
     }
 
     /// <inheritdoc/>
@@ -545,8 +533,11 @@ public class Chronos<T> : TimeSeriesFoundationModelBase<T>
     /// </remarks>
     public override void UpdateParameters(Vector<T> gradients)
     {
-        // Chronos is a pretrained foundation model — parameters are updated through the optimizer in Train()
-        throw new NotSupportedException("Chronos is a pretrained foundation model. Use Train() for parameter updates via the optimizer.");
+        // Parameters are updated through the optimizer in the base Train() → TrainWithTape path.
+        // Throwing here broke NeuralNetworkBase.WithParameters (which calls DeepCopy + UpdateParameters)
+        // — the IParameterizable contract has to succeed for smoke tests, clone flows, and parameter
+        // sweeps even on pretrained foundation checkpoints. Leave the body empty, same convention as
+        // the rest of the Finance foundation models.
     }
 
     /// <inheritdoc/>

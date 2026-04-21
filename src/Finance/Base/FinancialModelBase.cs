@@ -500,20 +500,54 @@ public abstract class FinancialModelBase<T> : NeuralNetworkBase<T>, IFinancialMo
         if (expectedOutput is null)
             throw new ArgumentNullException(nameof(expectedOutput));
 
-        // Perform forward pass
-        var output = Predict(input);
+        // Previously this method ran Predict() (NoGrad), computed an
+        // eager loss value, and delegated to TrainCore() for the actual
+        // backward + parameter update. TrainCore either threw
+        // NotSupportedException (the base default) or, in the ~12 derived
+        // overrides that implemented it, just called
+        //     _optimizer.UpdateParameters(Layers);
+        // WITHOUT running a backward pass first — which layers reject
+        // with "Backward pass must be called before updating parameters."
+        // The end result: Train() was 100% broken for every derived model
+        // that didn't ship its own Train override.
+        //
+        // Route through NeuralNetworkBase.TrainWithTape instead. That
+        // opens a GradientTape, runs a tape-connected forward via
+        // ForwardForTraining, computes the loss, calls
+        // tape.ComputeGradients, and hands the gradients to the
+        // configured optimizer — i.e., the same flow every other
+        // NeuralNetworkBase subclass uses. TrainWithTape sets LastLoss
+        // itself; we read it back here to preserve the _lastTrainingLoss
+        // / _lossHistory contract the rest of this base class exposes.
+        //
+        // TrainCore() remains for source compatibility but is now dead
+        // code — none of the ~12 overrides are invoked. See the
+        // "Backward pass must be called…" thread on PR #1177 for the
+        // scope discussion on the further Foundation-model Train
+        // overrides (CCDM, TimeMoE, etc.) which need model-specific
+        // fixes (diffusion score matching, mixture-of-experts routing)
+        // and are tracked as follow-up.
+        SetTrainingMode(true);
+        try
+        {
+            TrainWithTape(input, expectedOutput);
+        }
+        finally
+        {
+            SetTrainingMode(false);
+        }
 
-        // Calculate loss
-        var loss = LossFunction.CalculateLoss(output.ToVector(), expectedOutput.ToVector());
-        _lastTrainingLoss = loss;
-
-        // Track loss history
-        _lossHistory.Add(loss);
+        // TrainWithTape populates LastLoss from the tape's scalar loss
+        // tensor; mirror that into the legacy per-instance field + the
+        // bounded history list that IFinancialModel consumers read.
+        // LastLoss is T? on NeuralNetworkBase and remains null until the
+        // first successful training step — fall back to NumOps.Zero so
+        // callers reading _lastTrainingLoss never see the default(T).
+        T currentLoss = LastLoss is null ? NumOps.Zero : LastLoss;
+        _lastTrainingLoss = currentLoss;
+        _lossHistory.Add(currentLoss);
         if (_lossHistory.Count > 1000)
             _lossHistory.RemoveAt(0);
-
-        // Perform backward pass and update parameters
-        TrainCore(input, expectedOutput, output);
     }
 
     /// <summary>
@@ -547,6 +581,73 @@ public abstract class FinancialModelBase<T> : NeuralNetworkBase<T>, IFinancialMo
     public override Tensor<T> Predict(Tensor<T> input)
     {
         return Forecast(input);
+    }
+
+    /// <summary>
+    /// Tape-aware forward pass used by <c>NeuralNetworkBase.TrainWithTape</c>.
+    /// Delegates to <see cref="Forecast(Tensor{T}, double[])"/> — the same
+    /// entry point <see cref="Predict"/> uses — so the training-path output
+    /// shape matches the inference-path output shape by construction, at a
+    /// single point in the Finance hierarchy.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The base-class default
+    /// (<see cref="AiDotNet.NeuralNetworks.NeuralNetworkBase{T}.ForwardForTraining"/>)
+    /// iterates <c>Layers</c> in order. That is correct only for models
+    /// whose <see cref="Forecast"/> pipeline IS just flat layer iteration.
+    /// Every finance model with a custom forward (patching, channel split,
+    /// hierarchical decode, pos-encoding projection, …) instead applies
+    /// those steps inside its own <c>ForecastNative</c> / <c>ForwardNative</c>
+    /// / <c>Forward</c> override, so flat iteration produces a wrong
+    /// intermediate shape and the loss dies with <c>"Tensor shapes must
+    /// match"</c>. Delegating to <see cref="Forecast"/> uses the same
+    /// dispatch each model has already wired up for inference.
+    /// </para>
+    /// <para>
+    /// A model whose forward contains non-tape-aware ops (raw
+    /// <c>.Data.Span</c> copies, <c>.ToArray</c>/<c>.ToVector</c>
+    /// round-trips, <c>new Tensor&lt;T&gt;(data, shape)</c> wrappers that
+    /// replace an Engine op) will break backward with a tape error when
+    /// this path runs — that's the signal to convert those helpers to
+    /// <see cref="IEngine"/> ops.
+    /// </para>
+    /// </remarks>
+    public override Tensor<T> ForwardForTraining(Tensor<T> input)
+    {
+        if (!UseNativeMode)
+            throw new InvalidOperationException(
+                "Training is only supported in native mode.");
+        return ForwardNativeForTraining(input);
+    }
+
+    /// <summary>
+    /// Training-mode forward pass through the native (non-ONNX) model.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The default implementation delegates to <see cref="Forecast"/> — which
+    /// works for models whose forecast path is a plain forward pass that
+    /// honors the current training-mode state.
+    /// </para>
+    /// <para>
+    /// Subclasses whose <c>Forecast</c> calls <c>SetTrainingMode(false)</c>
+    /// (e.g. because inference does greedy decoding / no-dropout / no-noise
+    /// sampling), or whose <c>Forecast</c> runs a reverse-diffusion sampler
+    /// instead of the denoiser training target, MUST override this method
+    /// and route through the model's genuine forward-in-training pass
+    /// (typically <c>ForwardNative</c> / <c>Forward</c>). The bug this seam
+    /// exists to prevent: <see cref="ForwardForTraining"/> silently flips
+    /// the model back to inference mode mid-training-step, so parameters
+    /// like dropout masks and training-time noise sampling stop firing and
+    /// the model's generalization quietly regresses.
+    /// </para>
+    /// </remarks>
+    /// <param name="input">The training-batch input tensor.</param>
+    /// <returns>The model's output under training mode.</returns>
+    protected virtual Tensor<T> ForwardNativeForTraining(Tensor<T> input)
+    {
+        return Forecast(input, quantiles: null);
     }
 
     #endregion

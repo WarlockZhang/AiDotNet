@@ -432,20 +432,19 @@ public class Hippo<T> : ForecastingModelBase<T>
     public override void Train(Tensor<T> input, Tensor<T> target)
     {
         if (!_useNativeMode)
-            throw new InvalidOperationException("Training requires native mode. ONNX mode is inference-only.");
+            throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
-        var output = Forward(input);
+        base.Train(input, target);
+    }
 
-        // Calculate loss using vectors
-        LastLoss = _lossFunction.CalculateLoss(output.ToVector(), target.ToVector());
-
-        // Backward pass
-        var gradient = _lossFunction.CalculateDerivative(output.ToVector(), target.ToVector());
-
-        _optimizer.UpdateParameters(Layers);
-
-        SetTrainingMode(false);
+    /// <summary>
+    /// Training-mode forward: calls <see cref="Forward"/> directly so
+    /// the tape sees the Hippo SSM layers in training mode. The default
+    /// path uses <c>ForecastNative</c>, which sets inference mode.
+    /// </summary>
+    protected override Tensor<T> ForwardNativeForTraining(Tensor<T> input)
+    {
+        return Forward(input);
     }
 
     /// <summary>

@@ -546,18 +546,20 @@ public class FEDformer<T> : ForecastingModelBase<T>
     public override void Train(Tensor<T> input, Tensor<T> expectedOutput)
     {
         if (!_useNativeMode)
-            throw new InvalidOperationException("Training is not supported in ONNX mode.");
+            throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
+        base.Train(input, expectedOutput);
+    }
 
-        var prediction = Forward(input);
-        LastLoss = _lossFunction.CalculateLoss(prediction.ToVector(), expectedOutput.ToVector());
-
-        var outputGradient = _lossFunction.CalculateDerivative(prediction.ToVector(), expectedOutput.ToVector());
-
-        _optimizer.UpdateParameters(Layers);
-
-        SetTrainingMode(false);
+    /// <summary>
+    /// Training-mode forward: calls <see cref="Forward"/> directly so
+    /// the frequency-enhanced attention runs under its training-mode
+    /// behavior (e.g. mode-selection dropout). Default path would hit
+    /// <c>ForecastNative</c>, which switches to inference mode.
+    /// </summary>
+    protected override Tensor<T> ForwardNativeForTraining(Tensor<T> input)
+    {
+        return Forward(input);
     }
 
     /// <inheritdoc/>

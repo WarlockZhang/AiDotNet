@@ -581,28 +581,80 @@ public class MTGNN<T> : ForecastingModelBase<T>
     public override void Train(Tensor<T> input, Tensor<T> target)
     {
         if (!_useNativeMode)
-            throw new InvalidOperationException("Training requires native mode.");
+            throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
+        base.Train(input, target);
 
-        // Update adaptive adjacency before forward pass
+        // Node embeddings + the learned adjacency live outside Layers
+        // (double[,] fields, not Tensor<T>), so the tape-based base
+        // trainer can't compute their gradients. Preserve the pre-
+        // refactor training trajectory for that state: step the
+        // gradient-scaled random-perturbation update on the embeddings
+        // using the most recent loss as the gradient magnitude, then
+        // rebuild the adaptive adjacency so downstream inference uses
+        // the updated values.
+        var lossVec = new Vector<T>(new[] { LastLoss is not null ? LastLoss : NumOps.FromDouble(1e-3) });
+        UpdateNodeEmbeddingsFromGradient(lossVec);
         UpdateAdaptiveAdjacency();
+    }
 
-        // Forward pass
-        var output = Forward(input);
+    /// <summary>
+    /// Training-mode forward: mirrors <see cref="Forward"/> but swaps
+    /// <see cref="ApplyMixHopPropagation"/> for
+    /// <see cref="ApplyMixHopPropagationTape"/>, which uses
+    /// <c>Engine.TensorMatMul</c> instead of the tape-breaking
+    /// ToVector/manual-loop accumulator. Gradients now reach the
+    /// dense layers below the mix-hop step.
+    /// </summary>
+    protected override Tensor<T> ForwardNativeForTraining(Tensor<T> input)
+    {
+        var current = input;
+        foreach (var layer in Layers)
+            current = layer.Forward(current);
+        if (_adaptiveAdjacency is not null && _useNativeMode)
+            current = ApplyMixHopPropagationTape(current);
+        return current;
+    }
 
-        // Calculate loss
-        LastLoss = _lossFunction.CalculateLoss(output.ToVector(), target.ToVector());
+    /// <summary>
+    /// Tape-aware MixHop propagation: accumulates weighted powers of
+    /// the adaptive adjacency matrix times the node-feature matrix
+    /// (<c>H + sum_k w_k * A^k * H</c>) via
+    /// <see cref="IEngine.TensorMatMul"/>. Produces the same math as
+    /// <see cref="ApplyMixHopPropagation"/> but preserves the gradient
+    /// tape so backward can propagate through the whole expression.
+    /// </summary>
+    private Tensor<T> ApplyMixHopPropagationTape(Tensor<T> nodeFeatures)
+    {
+        if (_adaptiveAdjacency is null)
+            return nodeFeatures;
 
-        // Backward pass
-        var gradient = _lossFunction.CalculateDerivative(output.ToVector(), target.ToVector());
+        int totalSize = nodeFeatures.Length;
+        int featuresPerNode = totalSize / _numNodes;
+        if (featuresPerNode * _numNodes != totalSize)
+            return nodeFeatures;
 
-        _optimizer.UpdateParameters(Layers);
+        // Materialize the learned adjacency as a Tensor<T>. This is a
+        // non-trainable constant at the tape level — node-embedding
+        // updates rebuild _adaptiveAdjacency outside the tape each
+        // Train() call.
+        var adjData = new T[_numNodes * _numNodes];
+        for (int i = 0; i < _numNodes; i++)
+            for (int j = 0; j < _numNodes; j++)
+                adjData[i * _numNodes + j] = NumOps.FromDouble(_adaptiveAdjacency[i, j]);
+        var adj = new Tensor<T>(new[] { _numNodes, _numNodes }, new Vector<T>(adjData));
 
-        // Update node embeddings (simplified gradient update)
-        UpdateNodeEmbeddingsFromGradient(gradient);
-
-        SetTrainingMode(false);
+        var hMat = Engine.Reshape(nodeFeatures, new[] { _numNodes, featuresPerNode });
+        var acc = hMat; // k=0 term (identity)
+        var currentPower = hMat;
+        for (int hop = 0; hop < _mixHopDepth; hop++)
+        {
+            currentPower = Engine.TensorMatMul(adj, currentPower);
+            T weight = NumOps.FromDouble(1.0 / (hop + 2));
+            var weighted = Engine.TensorMultiplyScalar(currentPower, weight);
+            acc = Engine.TensorAdd(acc, weighted);
+        }
+        return Engine.Reshape(acc, nodeFeatures._shape);
     }
 
     /// <summary>

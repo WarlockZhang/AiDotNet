@@ -586,24 +586,35 @@ public class GraphWaveNet<T> : ForecastingModelBase<T>
     public override void Train(Tensor<T> input, Tensor<T> target)
     {
         if (!_useNativeMode)
-            throw new InvalidOperationException("Training requires native mode.");
+            throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
+        base.Train(input, target);
 
+        // Adaptive graph state (_nodeEmbedding1 / _nodeEmbedding2) lives
+        // outside Layers and so doesn't get gradients from the shared
+        // tape path. Keep it on a training trajectory: feed the most
+        // recent loss magnitude into UpdateNodeEmbeddingsFromGradient
+        // (which is itself a loss-scaled random-perturbation update in
+        // this simplified R-GCN port) and then refresh the adaptive
+        // adjacency matrix so downstream inference uses the updated
+        // embeddings.
         if (_useAdaptiveGraph)
+        {
+            var lossVec = new Vector<T>(new[] { LastLoss is not null ? LastLoss : NumOps.FromDouble(1e-3) });
+            UpdateNodeEmbeddingsFromGradient(lossVec);
             UpdateAdaptiveAdjacency();
+        }
+    }
 
-        var output = Forward(input);
-        LastLoss = _lossFunction.CalculateLoss(output.ToVector(), target.ToVector());
-
-        var gradient = _lossFunction.CalculateDerivative(output.ToVector(), target.ToVector());
-
-        _optimizer.UpdateParameters(Layers);
-
-        if (_useAdaptiveGraph)
-            UpdateNodeEmbeddingsFromGradient(gradient);
-
-        SetTrainingMode(false);
+    /// <summary>
+    /// Training-mode forward: calls <see cref="Forward"/> directly so
+    /// dropout and the adaptive-graph conv stay in training mode under
+    /// the tape. Default routes through <c>ForecastNative</c>, which
+    /// forces inference mode.
+    /// </summary>
+    protected override Tensor<T> ForwardNativeForTraining(Tensor<T> input)
+    {
+        return Forward(input);
     }
 
     /// <summary>

@@ -617,12 +617,35 @@ public class NonStationaryTransformer<T> : ForecastingModelBase<T>
         if (!_useNativeMode)
             throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
-        var predictions = Forward(input);
-        LastLoss = _lossFunction.CalculateLoss(predictions.ToVector(), target.ToVector());
-        var gradient = _lossFunction.CalculateDerivative(predictions.ToVector(), target.ToVector());
-        _optimizer.UpdateParameters(Layers);
-        SetTrainingMode(false);
+        // Issue #1166: the old body computed a loss + gradient and then
+        // called _optimizer.UpdateParameters(Layers) without a backward
+        // pass, so every layer's UpdateParameters threw "Backward pass
+        // must be called before updating parameters." Delegate to
+        // FinancialModelBase.Train — it routes through the tape-based
+        // NeuralNetworkBase.TrainWithTape flow (GradientTape forward +
+        // tape.ComputeGradients + optimizer.Step) that every other
+        // NeuralNetworkBase subclass uses.
+        base.Train(input, target);
+    }
+
+    /// <summary>
+    /// Tape-aware training forward. Calls <see cref="Forward"/> directly — the
+    /// same native path <see cref="Predict"/> uses — so the training output
+    /// shape matches the Predict target shape by construction.
+    /// </summary>
+    /// <remarks>
+    /// The base <see cref="FinancialModelBase{T}.ForwardForTraining"/> default
+    /// delegation runs through <see cref="Forecast"/> which for this model
+    /// calls ForecastNative and reshapes to a different horizon-aligned
+    /// contract than the raw <see cref="Forward"/> output. The resulting
+    /// Predict/Train shape disagreement (e.g. [1, 4, 8] from Forecast vs
+    /// [1, 8, 32] from Predict) blew up the MSE loss.
+    /// </remarks>
+    public override Tensor<T> ForwardForTraining(Tensor<T> input)
+    {
+        if (!_useNativeMode)
+            throw new InvalidOperationException("Training is only supported in native mode.");
+        return Forward(input);
     }
 
     /// <summary>

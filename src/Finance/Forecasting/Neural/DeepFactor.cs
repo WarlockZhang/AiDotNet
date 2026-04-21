@@ -521,20 +521,15 @@ public class DeepFactor<T> : ForecastingModelBase<T>
         if (!_useNativeMode)
             throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
-        try
-        {
-            var predictions = Forward(input);
-            LastLoss = _lossFunction.CalculateLoss(predictions.ToVector(), target.ToVector());
-
-            var gradient = _lossFunction.CalculateDerivative(predictions.ToVector(), target.ToVector());
-
-            _optimizer.UpdateParameters(Layers);
-        }
-        finally
-        {
-            SetTrainingMode(false);
-        }
+        // Issue #1166: the old body computed a loss + gradient and then
+        // called _optimizer.UpdateParameters(Layers) without a backward
+        // pass, so every layer's UpdateParameters threw "Backward pass
+        // must be called before updating parameters." Delegate to
+        // FinancialModelBase.Train — it routes through the tape-based
+        // NeuralNetworkBase.TrainWithTape flow (GradientTape forward +
+        // tape.ComputeGradients + optimizer.Step) that every other
+        // NeuralNetworkBase subclass uses.
+        base.Train(input, target);
     }
 
     /// <inheritdoc/>
@@ -857,7 +852,14 @@ public class DeepFactor<T> : ForecastingModelBase<T>
     /// </remarks>
     private static Tensor<T> ConcatenateTensors(Tensor<T> a, Tensor<T> b)
     {
-        return AiDotNetEngine.Current.TensorConcatenate([a, b], axis: 0);
+        // Flatten both inputs to rank-1 before concatenating so rank / shape
+        // mismatches between the factor branch (e.g. [1, horizon, F]) and the
+        // local branch (e.g. [1, horizon]) don't blow up TensorConcatenate,
+        // which requires every input to share every non-concat axis.
+        var engine = AiDotNetEngine.Current;
+        var flatA = a.Rank == 1 ? a : engine.Reshape(a, new[] { a.Length });
+        var flatB = b.Rank == 1 ? b : engine.Reshape(b, new[] { b.Length });
+        return engine.TensorConcatenate([flatA, flatB], axis: 0);
     }
 
     #endregion

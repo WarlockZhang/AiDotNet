@@ -450,12 +450,13 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
         if (_numQuantiles > 0 && idx < Layers.Count)
             _quantileOutput = Layers[idx++];
 
-        // Validate quantile head completeness when quantile mode is configured
-        if (_numQuantiles > 0 && (_quantileHidden is null || _quantileOutput is null))
-            throw new InvalidOperationException(
-                $"Quantile mode is enabled (NumQuantiles={_numQuantiles}) but the layer stack " +
-                "does not contain quantile head layers. Ensure CreateDefaultTimesFMLayers was called " +
-                "with numQuantiles > 0, or provide custom layers with quantile head.");
+        // Quantile head layers are optional: CreateDefaultTimesFMLayers doesn't
+        // currently emit them (NumQuantiles isn't a parameter of the helper),
+        // and the point-forecast path works without them. The quantile-forecast
+        // path at line ~755 already null-checks both fields before calling
+        // Forward(), so the absence is only material when ForecastWithQuantiles
+        // is actually invoked. Defer the "quantile head required" check to that
+        // call site instead of blocking construction.
     }
 
     /// <summary>
@@ -548,16 +549,26 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
         if (!_useNativeMode)
             throw new InvalidOperationException("Training is only supported in native mode.");
 
-        SetTrainingMode(true);
+        // Issue #1166: the old body computed a loss + gradient and then
+        // called _optimizer.UpdateParameters(Layers) without a backward
+        // pass, so every layer's UpdateParameters threw "Backward pass
+        // must be called before updating parameters." Delegate to
+        // FinancialModelBase.Train — it routes through the tape-based
+        // NeuralNetworkBase.TrainWithTape flow. The ForwardNativeForTraining
+        // override below keeps training mode on; see its remarks.
+        base.Train(input, target);
+    }
 
-        var predictions = Forward(input);
-        LastLoss = _lossFunction.CalculateLoss(predictions.ToVector(), target.ToVector());
-
-        var gradient = _lossFunction.CalculateDerivative(predictions.ToVector(), target.ToVector());
-
-        _optimizer.UpdateParameters(Layers);
-
-        SetTrainingMode(false);
+    /// <summary>
+    /// TimesFM training-mode forward. Bypasses <see cref="Forecast"/> /
+    /// <c>ForecastNative</c> because that path calls
+    /// <c>SetTrainingMode(false)</c> before running the model — which
+    /// silences dropout and attention noise during training. Going
+    /// directly through <c>Forward</c> preserves training-mode behavior.
+    /// </summary>
+    protected override Tensor<T> ForwardNativeForTraining(Tensor<T> input)
+    {
+        return Forward(input);
     }
 
     /// <inheritdoc/>
