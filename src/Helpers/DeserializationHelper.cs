@@ -184,6 +184,71 @@ public static class DeserializationHelper
 
             instance = ctor.Invoke(new object[] { inputShape, outputShape });
         }
+        else if (genericDef == typeof(FlattenLayer<>))
+        {
+            // FlattenLayer(int[] inputShape)
+            var ctor = type.GetConstructor(new Type[] { typeof(int[]) });
+            if (ctor is null)
+            {
+                throw new InvalidOperationException("Cannot find FlattenLayer constructor with (int[]).");
+            }
+
+            instance = ctor.Invoke(new object[] { inputShape });
+        }
+        else if (genericDef == typeof(TransposeLayer<>))
+        {
+            // TransposeLayer(int[] inputShape, int[] permutation)
+            //
+            // Prefer the permutation persisted in additionalParams (emitted by
+            // TransposeLayer.GetMetadata). Fall back to shape inference only
+            // when absent — inference is ambiguous whenever multiple input
+            // axes share the same extent, and degenerate whenever the
+            // permutation leaves the output shape equal to the input shape
+            // (e.g. swapping two equal-size axes).
+            int n = inputShape.Length;
+            int[]? permutation = TryGetIntArray(additionalParams, "Permutation");
+
+            if (permutation is not null)
+            {
+                if (permutation.Length != n)
+                    throw new InvalidOperationException(
+                        $"TransposeLayer deserialization: persisted Permutation length {permutation.Length} does not match inputShape rank {n}.");
+            }
+            else
+            {
+                if (inputShape.Length != outputShape.Length)
+                    throw new InvalidOperationException(
+                        $"TransposeLayer requires inputShape and outputShape to have the same rank. Got input rank {inputShape.Length}, output rank {outputShape.Length}.");
+
+                permutation = new int[n];
+                var used = new bool[n];
+                for (int i = 0; i < n; i++)
+                {
+                    int found = -1;
+                    for (int j = 0; j < n; j++)
+                    {
+                        if (!used[j] && inputShape[j] == outputShape[i])
+                        {
+                            found = j;
+                            break;
+                        }
+                    }
+                    if (found < 0)
+                        throw new InvalidOperationException(
+                            $"TransposeLayer deserialization: cannot recover permutation from shapes ({string.Join(",", inputShape)}) -> ({string.Join(",", outputShape)}). Re-serialize the network so the Permutation metadata is persisted.");
+                    permutation[i] = found;
+                    used[found] = true;
+                }
+            }
+
+            var ctor = type.GetConstructor(new Type[] { typeof(int[]), typeof(int[]) });
+            if (ctor is null)
+            {
+                throw new InvalidOperationException("Cannot find TransposeLayer constructor with (int[], int[]).");
+            }
+
+            instance = ctor.Invoke(new object[] { inputShape, permutation });
+        }
         else if (genericDef == typeof(EmbeddingLayer<>))
         {
             // EmbeddingLayer(int vocabularySize, int embeddingDimension)
@@ -328,6 +393,30 @@ public static class DeserializationHelper
                 throw new InvalidOperationException("Cannot find TransformerEncoderLayer constructor with (int, int, int).");
             }
             instance = ctor.Invoke(new object[] { embeddingSize, numHeads, feedForwardDim });
+        }
+        else if (genericDef == typeof(TransformerDecoderLayer<>))
+        {
+            // TransformerDecoderLayer(int embeddingSize, int numHeads, int feedForwardDim,
+            //                          int sequenceLength, IActivationFunction<T>?, IEngine?)
+            // Both scalar- and vector-activation overloads take the same shape; pick the
+            // scalar overload explicitly to disambiguate the call (it drives
+            // self-attn + cross-attn + FFN internally, all sized by embeddingSize).
+            int embeddingSize = inputShape[^1];
+            int numHeads = TryGetInt(additionalParams, "NumHeads") ?? ResolveDefaultHeadCount(embeddingSize);
+            int feedForwardDim = TryGetInt(additionalParams, "FeedForwardDim")
+                ?? TryGetInt(additionalParams, "FeedForwardDimension")
+                ?? embeddingSize * 4;
+            int sequenceLength = inputShape.Length >= 2 ? inputShape[0] : 1;
+
+            var activationFuncType = typeof(IActivationFunction<>).MakeGenericType(typeof(T));
+            var engineType = typeof(AiDotNet.Tensors.Engines.IEngine);
+            var ctor = type.GetConstructor(new Type[] { typeof(int), typeof(int), typeof(int), typeof(int), activationFuncType, engineType });
+            if (ctor is null)
+            {
+                throw new InvalidOperationException(
+                    "Cannot find TransformerDecoderLayer constructor with (int, int, int, int, IActivationFunction<T>, IEngine).");
+            }
+            instance = ctor.Invoke(new object?[] { embeddingSize, numHeads, feedForwardDim, sequenceLength, null, null });
         }
         else if (genericDef == typeof(SelfAttentionLayer<>))
         {
@@ -1480,6 +1569,28 @@ public static class DeserializationHelper
                 return parsed;
         }
         return null;
+    }
+
+    private static int[]? TryGetIntArray(Dictionary<string, object>? parameters, string key)
+    {
+        if (parameters is null || !parameters.TryGetValue(key, out var value) || value is null)
+            return null;
+
+        if (value is int[] arr)
+            return arr;
+
+        string str = value.ToString() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(str))
+            return null;
+
+        var parts = str.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        var result = new int[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (!int.TryParse(parts[i], out result[i]))
+                return null;
+        }
+        return result;
     }
 
     private static double? TryGetDouble(Dictionary<string, object>? parameters, string key)

@@ -8,6 +8,30 @@ class Program
 {
     static async Task Main(string[] args)
     {
+        // Bottleneck-profiling mode: run a single model at research-paper
+        // defaults and exit. Invoked under dotnet-trace to collect CPU
+        // samples for PR #1182 perf investigation.
+        if (args.Length > 0 && args[0] == "chronosbolt-profile")
+        {
+            ChronosBoltProfile.Run();
+            return;
+        }
+        if (args.Length > 0 && args[0] == "timemoe-profile")
+        {
+            TimeMoEProfile.Run();
+            return;
+        }
+        if (args.Length > 0 && args[0] == "timesfm-profile")
+        {
+            TimesFMProfile.Run();
+            return;
+        }
+        if (args.Length > 0 && args[0] == "moment-profile")
+        {
+            MOMENTProfile.Run();
+            return;
+        }
+
         int choice = -1;
 
         // Check for command-line argument

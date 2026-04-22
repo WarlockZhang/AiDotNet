@@ -11,6 +11,7 @@ using AiDotNet.NeuralNetworks;
 using AiDotNet.NeuralNetworks.Layers;
 using AiDotNet.Optimizers;
 using AiDotNet.Tensors.Helpers;
+using AiDotNet.Validation;
 using Microsoft.ML.OnnxRuntime;
 using OnnxTensors = Microsoft.ML.OnnxRuntime.Tensors;
 
@@ -68,10 +69,6 @@ public class TimeMoE<T> : TimeSeriesFoundationModelBase<T>
     #region Fields
 
     private readonly bool _useNativeMode;
-    private ILayer<T>? _patchEmbedding;
-    private readonly List<ILayer<T>> _transformerLayers = [];
-    private ILayer<T>? _finalLayerNorm;
-    private ILayer<T>? _forecastHead;
 
     private readonly IGradientBasedOptimizer<T, Tensor<T>, Tensor<T>> _optimizer;
     private readonly ILossFunction<T> _lossFunction;
@@ -201,45 +198,26 @@ public class TimeMoE<T> : TimeSeriesFoundationModelBase<T>
         if (Architecture.Layers is not null && Architecture.Layers.Count > 0)
         {
             Layers.AddRange(Architecture.Layers);
-            ExtractLayerReferences();
         }
         else if (_useNativeMode)
         {
+            Guard.Positive(_numExperts, nameof(_numExperts));
+            Guard.Positive(_numActiveExperts, nameof(_numActiveExperts));
+            Guard.Positive(_numHeads, nameof(_numHeads));
+            Guard.Positive(_hiddenDimension, nameof(_hiddenDimension));
+            if (_numActiveExperts > _numExperts)
+                throw new ArgumentOutOfRangeException(
+                    nameof(_numActiveExperts),
+                    $"NumActiveExperts ({_numActiveExperts}) must be <= NumExperts ({_numExperts}).");
+            if (_hiddenDimension % _numHeads != 0)
+                throw new ArgumentException(
+                    $"HiddenDimension ({_hiddenDimension}) must be divisible by NumHeads ({_numHeads}).");
+
             Layers.AddRange(LayerHelper<T>.CreateDefaultTimeMoELayers(
                 Architecture, _contextLength, _forecastHorizon, _patchLength,
                 _hiddenDimension, _numLayers, _numHeads, _intermediateSize,
-                _numExperts, _dropout));
-            ExtractLayerReferences();
+                _numExperts, _numActiveExperts, _dropout));
         }
-    }
-
-    private void ExtractLayerReferences()
-    {
-        int idx = 0;
-
-        if (idx < Layers.Count)
-            _patchEmbedding = Layers[idx++];
-
-        _transformerLayers.Clear();
-        // Each MoE block consists of:
-        //   With dropout: norm(1) + attn_QKV+out(4) + dropout(1) + norm(1) + N*2 expert FFN layers + router(1) + dropout(1) = 9 + N*2
-        //   Without dropout: norm(1) + attn_QKV+out(4) + norm(1) + N*2 expert FFN layers + router(1) = 7 + N*2
-        int layersPerBlock = (_dropout > 0 ? 9 : 7) + _numExperts * 2;
-        int totalLayers = _numLayers * layersPerBlock;
-
-        for (int i = 0; i < totalLayers && idx < Layers.Count; i++)
-            _transformerLayers.Add(Layers[idx++]);
-
-        if (idx < Layers.Count)
-            _finalLayerNorm = Layers[idx++];
-
-        if (idx < Layers.Count)
-            _forecastHead = Layers[idx++];
-
-        int expectedLayers = 1 + totalLayers + 2; // patch + transformer + norm + forecast
-        if (Layers.Count < expectedLayers)
-            System.Diagnostics.Debug.WriteLine(
-                $"TimeMoE: Expected {expectedLayers} layers but found {Layers.Count}. Some layer references may be null.");
     }
 
     #endregion
@@ -476,9 +454,16 @@ public class TimeMoE<T> : TimeSeriesFoundationModelBase<T>
 
     private Tensor<T> ForwardNative(Tensor<T> input)
     {
-        var normalized = ApplyInstanceNormalization(input);
-        var current = normalized;
-
+        // Time-MoE (Shi et al., 2024) is a decoder-only GPT-style transformer
+        // whose per-patch tokens feed a stack of self-attention + FFN blocks,
+        // then a flatten + linear forecast head. The helper emits a flat,
+        // sequentially-composable Layers list (ReshapeLayer → DenseLayer
+        // (patch embed) → N × TransformerEncoderLayer (+ optional DropoutLayer)
+        // → FlattenLayer → DenseLayer (forecast head)), so ForwardNative is a
+        // straight sequential dispatch. Causal masking for the decoder-only
+        // semantics is applied by the attention block's own mask config, not
+        // at this orchestration layer.
+        var current = ApplyInstanceNormalization(input);
         bool addedBatchDim = false;
         if (current.Rank == 1)
         {
@@ -486,17 +471,8 @@ public class TimeMoE<T> : TimeSeriesFoundationModelBase<T>
             addedBatchDim = true;
         }
 
-        if (_patchEmbedding is not null)
-            current = _patchEmbedding.Forward(current);
-
-        foreach (var layer in _transformerLayers)
+        foreach (var layer in Layers)
             current = layer.Forward(current);
-
-        if (_finalLayerNorm is not null)
-            current = _finalLayerNorm.Forward(current);
-
-        if (_forecastHead is not null)
-            current = _forecastHead.Forward(current);
 
         if (addedBatchDim && current.Rank == 2 && current.Shape[0] == 1)
             current = current.Reshape(new[] { current.Shape[1] });
@@ -543,18 +519,23 @@ public class TimeMoE<T> : TimeSeriesFoundationModelBase<T>
 
     private new int GetParameterCount()
     {
+        // Matches the paper-architecture helper: patch embed + N TimeMoE
+        // blocks (attention + MoE-FFN with numExperts experts + router +
+        // layer norms) + flatten + forecast head. Per-block:
+        //   attention Q/K/V/O      = 4 · H² + 4 · H
+        //   MoE experts (dense FFN) = numExperts · (2·H·I + H + I)
+        //   MoE router              = H · numExperts + numExperts (weight + bias)
+        //   layer norms (2 pre-norm) = 4 · H
         int numPatches = _contextLength / _patchLength;
         long total = (long)_patchLength * _hiddenDimension + _hiddenDimension;
 
-        // Per layer: attention + MoE FFN (all experts)
-        long perLayer = 4L * _hiddenDimension * _hiddenDimension + 4 * _hiddenDimension;
-        perLayer += (long)_numExperts * (2L * _hiddenDimension * _intermediateSize + _hiddenDimension + _intermediateSize);
-        perLayer += (long)_hiddenDimension * _numExperts; // router
-        perLayer += 4L * _hiddenDimension; // layer norms
+        long perLayer = 4L * _hiddenDimension * _hiddenDimension + 4 * _hiddenDimension; // QKV + out
+        perLayer += (long)_numExperts * (2L * _hiddenDimension * _intermediateSize + _hiddenDimension + _intermediateSize); // MoE experts
+        perLayer += (long)_hiddenDimension * _numExperts + _numExperts; // router weight + bias
+        perLayer += 4L * _hiddenDimension; // 2 pre-norm layers
         total += perLayer * _numLayers;
 
-        total += 2L * _hiddenDimension;
-        total += (long)numPatches * _hiddenDimension * _forecastHorizon;
+        total += (long)numPatches * _hiddenDimension * _forecastHorizon + _forecastHorizon;
 
         return (int)Math.Min(total, int.MaxValue);
     }

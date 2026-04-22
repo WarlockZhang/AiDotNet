@@ -69,11 +69,6 @@ public class TimeMAE<T> : TimeSeriesFoundationModelBase<T>
     #region Fields
 
     private readonly bool _useNativeMode;
-    private ILayer<T>? _patchEmbedding;
-    private readonly List<ILayer<T>> _encoderLayers = [];
-    private readonly List<ILayer<T>> _decoderLayers = [];
-    private ILayer<T>? _reconstructionHead;
-    private ILayer<T>? _forecastHead;
 
     private readonly IGradientBasedOptimizer<T, Tensor<T>, Tensor<T>> _optimizer;
     private readonly ILossFunction<T> _lossFunction;
@@ -210,40 +205,13 @@ public class TimeMAE<T> : TimeSeriesFoundationModelBase<T>
         if (Architecture.Layers is not null && Architecture.Layers.Count > 0)
         {
             Layers.AddRange(Architecture.Layers);
-            ExtractLayerReferences();
         }
         else if (_useNativeMode)
         {
             Layers.AddRange(LayerHelper<T>.CreateDefaultTimeMAELayers(
                 Architecture, _contextLength, _forecastHorizon, _patchLength,
                 _hiddenDimension, _numEncoderLayers, _numDecoderLayers, _numHeads, _dropout));
-            ExtractLayerReferences();
         }
-    }
-
-    private void ExtractLayerReferences()
-    {
-        int idx = 0;
-        int layersPerBlock = _dropout > 0 ? 9 : 7;
-
-        if (idx < Layers.Count)
-            _patchEmbedding = Layers[idx++];
-
-        _encoderLayers.Clear();
-        int totalEncoderLayers = _numEncoderLayers * layersPerBlock;
-        for (int i = 0; i < totalEncoderLayers && idx < Layers.Count; i++)
-            _encoderLayers.Add(Layers[idx++]);
-
-        _decoderLayers.Clear();
-        int totalDecoderLayers = _numDecoderLayers * layersPerBlock;
-        for (int i = 0; i < totalDecoderLayers && idx < Layers.Count; i++)
-            _decoderLayers.Add(Layers[idx++]);
-
-        if (idx < Layers.Count)
-            _reconstructionHead = Layers[idx++];
-
-        if (idx < Layers.Count)
-            _forecastHead = Layers[idx++];
     }
 
     #endregion
@@ -480,6 +448,141 @@ public class TimeMAE<T> : TimeSeriesFoundationModelBase<T>
 
     #endregion
 
+    #region Masked Pretraining (Cheng et al. 2023)
+
+    /// <summary>
+    /// Performs one TimeMAE masked-reconstruction pretraining forward pass per Cheng
+    /// et al. 2023. Randomly masks a fraction of input patches (MaskRatio, paper default
+    /// 0.6), runs the encoder over the partially-masked input, and returns the
+    /// reconstructed full signal alongside the patch-level mask. The caller can compute
+    /// reconstruction loss ONLY over masked patches (the paper's self-supervised signal).
+    /// </summary>
+    /// <param name="input">Input time series of shape [B, contextLength] or [contextLength].</param>
+    /// <param name="seed">
+    /// Optional seed for reproducible masking. When null, uses the cryptographically-secure
+    /// <see cref="RandomHelper.CreateSecureRandom"/>.
+    /// </param>
+    /// <returns>
+    /// A tuple <c>(reconstructed, patchMask)</c> where <c>reconstructed</c> is the full
+    /// signal predicted by the model and <c>patchMask</c> is a binary [B, numPatches]
+    /// tensor with 1 at masked positions and 0 at visible positions. For loss computation:
+    /// <c>loss = mean( patchMask · (reconstructed - input_raw)² )</c>.
+    /// </returns>
+    public (Tensor<T> reconstructed, Tensor<T> patchMask) PretrainMaskedReconstruction(
+        Tensor<T> input, int? seed = null)
+    {
+        if (!_useNativeMode)
+            throw new InvalidOperationException(
+                "Masked pretraining requires native mode. ONNX inference does not support pretraining.");
+        if (input is null) throw new ArgumentNullException(nameof(input));
+
+        // Validate input geometry before we index with b * _contextLength +
+        // p * _patchLength + t. A bad shape would otherwise walk past
+        // input.Data.Span / masked.Data.Span.
+        if (_patchLength <= 0)
+            throw new InvalidOperationException("PatchLength must be positive.");
+        if (_contextLength <= 0 || _contextLength % _patchLength != 0)
+            throw new InvalidOperationException(
+                $"ContextLength ({_contextLength}) must be positive and divisible by PatchLength ({_patchLength}).");
+        if (input.Rank != 1 && input.Rank != 2)
+            throw new ArgumentException(
+                $"TimeMAE pretraining expects rank-1 or rank-2 input; got rank {input.Rank}, shape "
+                + $"[{string.Join(", ", input.Shape.ToArray())}].",
+                nameof(input));
+        int trailingDim = input.Shape[input.Rank - 1];
+        if (trailingDim != _contextLength)
+            throw new ArgumentException(
+                $"TimeMAE pretraining expects each sample to have length {_contextLength}; got shape "
+                + $"[{string.Join(", ", input.Shape.ToArray())}].",
+                nameof(input));
+
+        bool addedBatch = false;
+        if (input.Rank == 1)
+        {
+            input = input.Reshape(new[] { 1, input.Length });
+            addedBatch = true;
+        }
+        int batchSize = input.Shape[0];
+        int numPatches = _contextLength / _patchLength;
+
+        // Build patch-level mask [B, numPatches]: 1 = masked, 0 = visible.
+        var rng = seed.HasValue
+            ? RandomHelper.CreateSeededRandom(seed.Value)
+            : RandomHelper.CreateSecureRandom();
+        var patchMask = new Tensor<T>(new[] { batchSize, numPatches });
+        int maskedCount = (int)Math.Round(numPatches * _maskRatio);
+        if (maskedCount < 1) maskedCount = 1;
+        if (maskedCount > numPatches - 1) maskedCount = numPatches - 1;
+        for (int b = 0; b < batchSize; b++)
+        {
+            // Random subset of patches to mask.
+            var indices = Enumerable.Range(0, numPatches).ToList();
+            for (int i = indices.Count - 1; i > 0; i--)
+            {
+                int j = rng.Next(i + 1);
+                (indices[i], indices[j]) = (indices[j], indices[i]);
+            }
+            for (int m = 0; m < maskedCount; m++)
+                patchMask.Data.Span[b * numPatches + indices[m]] = NumOps.One;
+        }
+
+        // Apply mask: zero out masked patches in input.
+        var masked = new Tensor<T>(input._shape);
+        for (int b = 0; b < batchSize; b++)
+        {
+            for (int p = 0; p < numPatches; p++)
+            {
+                bool isMasked = !NumOps.Equals(patchMask.Data.Span[b * numPatches + p], NumOps.Zero);
+                for (int t = 0; t < _patchLength; t++)
+                {
+                    int idx = b * _contextLength + p * _patchLength + t;
+                    masked.Data.Span[idx] = isMasked ? NumOps.Zero : input.Data.Span[idx];
+                }
+            }
+        }
+
+        // Forward through the full Layers stack (encoder + decoder + reconstruction head).
+        // The reconstruction head's output is [B, contextLength] before the forecast-head
+        // Dense. Because the helper emits reconstruction then forecast, we stop one
+        // layer early for pure-reconstruction output.
+        //
+        // Validate that the final layer is the expected forecast-head Dense
+        // (contextLength → forecastHorizon). If the layer stack has been
+        // customized upstream the "skip the last layer" heuristic would
+        // silently slice off the reconstruction head instead and the caller
+        // would train on garbage. Fail fast so the bug surfaces at pretrain
+        // time rather than as a silent accuracy regression.
+        if (Layers.Count == 0)
+            throw new InvalidOperationException(
+                "TimeMAE pretraining requires a built layer stack, but Layers is empty.");
+        if (Layers[Layers.Count - 1] is not DenseLayer<T> forecastHead
+            || forecastHead.GetInputShape().Length == 0
+            || forecastHead.GetInputShape()[^1] != _contextLength
+            || forecastHead.GetOutputShape().Length == 0
+            || forecastHead.GetOutputShape()[^1] != _forecastHorizon)
+        {
+            throw new InvalidOperationException(
+                $"TimeMAE pretraining expected the final layer to be a forecast-head DenseLayer<T> "
+                + $"of shape ({_contextLength} → {_forecastHorizon}), but found "
+                + $"{Layers[Layers.Count - 1].GetType().Name}. The 'Layers.Count - 1' reconstruction "
+                + "boundary only holds for the LayerHelper.CreateDefaultTimeMAELayers stack.");
+        }
+
+        var current = ApplyInstanceNormalization(masked);
+        int reconEnd = Layers.Count - 1; // skip validated final Dense(contextLength → forecastHorizon)
+        for (int i = 0; i < reconEnd; i++)
+            current = Layers[i].Forward(current);
+
+        if (addedBatch && current.Rank == 2 && current.Shape[0] == 1)
+            current = current.Reshape(new[] { current.Shape[1] });
+        if (addedBatch)
+            patchMask = patchMask.Reshape(new[] { numPatches });
+
+        return (current, patchMask);
+    }
+
+    #endregion
+
     #region Forward/Backward Pass
 
     private Tensor<T> ForwardNative(Tensor<T> input)
@@ -494,20 +597,12 @@ public class TimeMAE<T> : TimeSeriesFoundationModelBase<T>
             addedBatchDim = true;
         }
 
-        if (_patchEmbedding is not null)
-            current = _patchEmbedding.Forward(current);
-
-        foreach (var layer in _encoderLayers)
+        // Helper emits a flat Layers list: Reshape → Dense(patch) →
+        // numEncoder × TransformerEncoderLayer (+ optional Dropout) →
+        // numDecoder × TransformerEncoderLayer (+ optional Dropout) →
+        // Flatten → Dense(reconstruction head) → Dense(forecast head).
+        foreach (var layer in Layers)
             current = layer.Forward(current);
-
-        foreach (var layer in _decoderLayers)
-            current = layer.Forward(current);
-
-        if (_reconstructionHead is not null)
-            current = _reconstructionHead.Forward(current);
-
-        if (_forecastHead is not null)
-            current = _forecastHead.Forward(current);
 
         if (addedBatchDim && current.Rank == 2 && current.Shape[0] == 1)
             current = current.Reshape(new[] { current.Shape[1] });

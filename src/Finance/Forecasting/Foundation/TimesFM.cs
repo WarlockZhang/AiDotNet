@@ -199,6 +199,7 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
     private int _numHeads;
     private double _dropout;
     private bool _usePretrainedWeights;
+    private int _outputPatchLength;
     // TimesFM 2.5 fields
     private int _numQuantiles;
     private int _quantileHeadDimension;
@@ -313,6 +314,7 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
         _numHeads = options.NumHeads;
         _dropout = options.DropoutRate;
         _usePretrainedWeights = options.UsePretrainedWeights;
+        _outputPatchLength = options.OutputPatchLength;
         _numQuantiles = options.NumQuantiles;
         _quantileHeadDimension = options.QuantileHeadDimension;
     }
@@ -364,6 +366,7 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
         _numHeads = options.NumHeads;
         _dropout = options.DropoutRate;
         _usePretrainedWeights = options.UsePretrainedWeights;
+        _outputPatchLength = options.OutputPatchLength;
         _numQuantiles = options.NumQuantiles;
         _quantileHeadDimension = options.QuantileHeadDimension;
 
@@ -397,9 +400,8 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
         {
             Layers.AddRange(LayerHelper<T>.CreateDefaultTimesFMLayers(
                 Architecture, _contextLength, _forecastHorizon, 1,
-                _patchLength, _hiddenDimension, _numLayers, _numHeads, _dropout));
-
-            ExtractLayerReferences();
+                _patchLength, _hiddenDimension, _numLayers, _numHeads, _dropout,
+                _outputPatchLength));
         }
     }
 
@@ -513,6 +515,17 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
             errors.Add("HiddenDimension must be divisible by NumHeads.");
         if (options.DropoutRate < 0 || options.DropoutRate >= 1)
             errors.Add("DropoutRate must be between 0 and 1 (exclusive).");
+        if (options.OutputPatchLength < 1)
+            errors.Add("OutputPatchLength must be at least 1.");
+        if (options.PatchLength >= 1 && options.ContextLength >= 1 && options.OutputPatchLength >= 1)
+        {
+            int numPatches = options.ContextLength / options.PatchLength;
+            if ((long)numPatches * options.OutputPatchLength < options.ForecastHorizon)
+                errors.Add(
+                    $"OutputPatchLength ({options.OutputPatchLength}) is too small to cover ForecastHorizon ("
+                    + $"{options.ForecastHorizon}) with {numPatches} patches — numPatches * OutputPatchLength "
+                    + $"= {(long)numPatches * options.OutputPatchLength} must be >= ForecastHorizon.");
+        }
 
         if (errors.Count > 0)
             throw new ArgumentException($"Invalid options: {string.Join(", ", errors)}");
@@ -629,6 +642,7 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
             NumHeads = _numHeads,
             DropoutRate = _dropout,
             UsePretrainedWeights = _usePretrainedWeights,
+            OutputPatchLength = _outputPatchLength,
             NumQuantiles = _numQuantiles,
             QuantileHeadDimension = _quantileHeadDimension
         };
@@ -654,6 +668,7 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
         writer.Write(_numHeads);
         writer.Write(_dropout);
         writer.Write(_usePretrainedWeights);
+        writer.Write(_outputPatchLength);
         // TimesFM 2.5 fields
         writer.Write(_numQuantiles);
         writer.Write(_quantileHeadDimension);
@@ -677,6 +692,7 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
         _numHeads = reader.ReadInt32();
         _dropout = reader.ReadDouble();
         _usePretrainedWeights = reader.ReadBoolean();
+        _outputPatchLength = reader.ReadInt32();
         // TimesFM 2.5 fields
         _numQuantiles = reader.ReadInt32();
         _quantileHeadDimension = reader.ReadInt32();
@@ -734,32 +750,27 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
 
         SetTrainingMode(false);
 
-        // Get hidden states from the transformer (before the point forecast output projection)
+        // Run everything up to the forecast-head DenseLayer to obtain hidden
+        // states. The helper emits the tail as:
+        //   ... transformer blocks → Dense(hiddenDim → outputPatchLength) → Flatten
+        // so we must stop BEFORE the Dense projection (Layers.Count - 2), not
+        // just before Flatten — otherwise `hiddenStates` is already projected
+        // to [B, numPatches, outputPatchLength] and the quantile head
+        // conditions the wrong representation.
+        if (Layers.Count < 2)
+            throw new InvalidOperationException(
+                "TimesFM quantile forecasting requires the forecast-projection Dense + Flatten "
+                + "tail built by CreateDefaultTimesFMLayers.");
+
         var current = historicalData;
 
         if (current.Rank == 1)
             current = current.Reshape(new[] { 1, current.Length });
 
-        // Patch embedding
-        if (_patchEmbedding is not null)
-            current = _patchEmbedding.Forward(current);
+        int forecastProjectionIdx = Layers.Count - 2;
+        for (int i = 0; i < forecastProjectionIdx; i++)
+            current = Layers[i].Forward(current);
 
-        // Position embedding
-        if (_positionEmbedding is not null)
-        {
-            var posEmbed = _positionEmbedding.Forward(current);
-            current = AddTensors(current, posEmbed);
-        }
-
-        // Transformer layers
-        foreach (var layer in _transformerLayers)
-            current = layer.Forward(current);
-
-        // Final layer norm
-        if (_finalLayerNorm is not null)
-            current = _finalLayerNorm.Forward(current);
-
-        // Now use quantile head to produce quantile-specific forecasts
         var hiddenStates = current;
         var result = new Tensor<T>(new[] { _forecastHorizon, quantiles.Length });
 
@@ -946,33 +957,37 @@ public class TimesFM<T> : TimeSeriesFoundationModelBase<T>
         if (!_useNativeMode)
             return ForecastOnnx(input);
 
-        // Reshape input into patches conceptually (handled by patch embedding layer)
+        // TimesFM (Das et al., 2024) decoder-only transformer. The helper
+        // emits ReshapeLayer → DenseLayer(patch embed) → N ×
+        // TransformerEncoderLayer (+ optional Dropout) → Dense(hiddenDim →
+        // output_patch_length) applied per-patch → FlattenLayer. The final
+        // output shape is [B, numPatches · output_patch_length]. Slice to
+        // [B, forecastHorizon] to honor the user's horizon (paper §4:
+        // "the last window of output_patch_length forecast values is used
+        // when the horizon is shorter; longer horizons are produced by
+        // autoregressively feeding back predictions").
         var current = input;
-
-        // Patch embedding: [batch, context] -> [batch, num_patches, hidden]
-        if (_patchEmbedding is not null)
-            current = _patchEmbedding.Forward(current);
-
-        // Add positional embeddings
-        if (_positionEmbedding is not null)
-        {
-            var posEmbed = _positionEmbedding.Forward(current);
-            current = AddTensors(current, posEmbed);
-        }
-
-        // Process through transformer layers
-        foreach (var layer in _transformerLayers)
-        {
+        foreach (var layer in Layers)
             current = layer.Forward(current);
+
+        // Slice current [B, numPatches * outputPatchLength] to [B, forecastHorizon].
+        // The last forecastHorizon elements of the flattened per-patch head output
+        // represent the most-recent-patch's forecasts (paper: patches roll forward,
+        // last patch predicts the furthest future). For forecastHorizon ≤
+        // outputPatchLength the last patch suffices; for longer horizons we take
+        // the tail of the full concatenated sequence.
+        int total = current.Shape.Length >= 2 ? current.Shape[current.Shape.Length - 1] : current.Length;
+        if (total > _forecastHorizon)
+        {
+            // Tape-aware narrow over the last axis. The manual copy-out path
+            // detached gradients from the flattened forecast head whenever
+            // total > forecastHorizon — which is the DEFAULT TimesFM case
+            // (outputPatchLength=128, forecastHorizon=96). TensorNarrow records
+            // a SliceNarrow backward that propagates the gradient slice back
+            // into the full pre-slice buffer.
+            int offset = total - _forecastHorizon;
+            current = Engine.TensorNarrow(current, current.Rank - 1, offset, _forecastHorizon);
         }
-
-        // Final layer normalization
-        if (_finalLayerNorm is not null)
-            current = _finalLayerNorm.Forward(current);
-
-        // Output projection to forecast horizon
-        if (_outputProjection is not null)
-            current = _outputProjection.Forward(current);
 
         return current;
     }

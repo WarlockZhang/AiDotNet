@@ -101,34 +101,22 @@ public class MOMENT<T> : TimeSeriesFoundationModelBase<T>
     #region Native Mode Fields
 
     /// <summary>
-    /// Patch embedding layer that projects raw patches to hidden dimension.
+    /// Reconstruction head for anomaly detection and imputation per Goswami et al. 2024:
+    /// Dense(hiddenDim → patchLength) applied per-patch followed by Flatten to
+    /// [B, contextLength]. Built eagerly in <see cref="InitializeLayers"/> so its
+    /// parameters are part of the model's serialized state (Clone / DeepCopy /
+    /// Serialize/Deserialize round-trip through the Layers list) rather than
+    /// lazy state that would be silently lost on clone.
     /// </summary>
-    private ILayer<T>? _patchEmbedding;
+    private List<ILayer<T>>? _reconstructionHead;
 
     /// <summary>
-    /// Transformer encoder layers (T5-style).
+    /// Classification heads per Goswami et al. 2024: mean-pool over the patch axis
+    /// then Dense(hiddenDim → numClasses). Keyed by <c>numClasses</c> so a single
+    /// MOMENT instance can serve multiple class-count requests without silently
+    /// reusing the weights of the first-seen numClasses for a different shape.
     /// </summary>
-    private readonly List<ILayer<T>> _transformerLayers = [];
-
-    /// <summary>
-    /// Final layer normalization before task heads.
-    /// </summary>
-    private ILayer<T>? _finalLayerNorm;
-
-    /// <summary>
-    /// Forecasting head: projects encoder output to forecast horizon.
-    /// </summary>
-    private ILayer<T>? _forecastHead;
-
-    /// <summary>
-    /// Reconstruction head: used for anomaly detection and imputation.
-    /// </summary>
-    private ILayer<T>? _reconstructionHead;
-
-    /// <summary>
-    /// Classification head: projects pooled output to class logits.
-    /// </summary>
-    private ILayer<T>? _classificationHead;
+    private readonly Dictionary<int, List<ILayer<T>>> _classificationHeads = new();
 
     #endregion
 
@@ -310,7 +298,6 @@ public class MOMENT<T> : TimeSeriesFoundationModelBase<T>
         {
             Layers.AddRange(Architecture.Layers);
             ValidateCustomLayers(Layers);
-            ExtractLayerReferences();
         }
         else if (_useNativeMode)
         {
@@ -319,43 +306,40 @@ public class MOMENT<T> : TimeSeriesFoundationModelBase<T>
                 _hiddenDimension, _numLayers, _numHeads, _intermediateSize,
                 _dropout, _numClasses));
 
-            ExtractLayerReferences();
+            // Build reconstruction head eagerly so its weights are part of the
+            // model's serialized state right from construction (previously it was
+            // lazy-built on first Reconstruct() call, which meant Clone/DeepCopy
+            // of an un-exercised reconstruction path produced a model with a
+            // DIFFERENT random head on the clone side). Classification heads are
+            // still lazy since they're keyed by numClasses at call time.
+            EnsureReconstructionHead();
         }
     }
 
-    private void ExtractLayerReferences()
+    private void EnsureReconstructionHead()
     {
-        int idx = 0;
+        if (_reconstructionHead is not null) return;
+        int numPatches = _contextLength / _patchLength;
+        _reconstructionHead = LayerHelper<T>.CreateMOMENTReconstructionHead(
+            numPatches, _hiddenDimension, _patchLength).ToList();
+    }
 
-        // Patch embedding
-        if (idx < Layers.Count)
-            _patchEmbedding = Layers[idx++];
-
-        // Transformer layers
-        _transformerLayers.Clear();
-        int layersPerBlock = _dropout > 0 ? 9 : 7;
-        int totalTransformerLayers = _numLayers * layersPerBlock;
-
-        for (int i = 0; i < totalTransformerLayers && idx < Layers.Count; i++)
+    /// <summary>
+    /// Returns the classification head for the given class count, building it on
+    /// demand. Cache keyed on <c>numClasses</c> so each label-space gets its own
+    /// head instead of silently reusing the first one.
+    /// </summary>
+    private List<ILayer<T>> GetOrBuildClassificationHead(int numClasses)
+    {
+        if (numClasses < 1) throw new ArgumentOutOfRangeException(nameof(numClasses));
+        if (!_classificationHeads.TryGetValue(numClasses, out var head))
         {
-            _transformerLayers.Add(Layers[idx++]);
+            int numPatches = _contextLength / _patchLength;
+            head = LayerHelper<T>.CreateMOMENTClassificationHead(
+                numPatches, _hiddenDimension, numClasses).ToList();
+            _classificationHeads[numClasses] = head;
         }
-
-        // Final layer norm
-        if (idx < Layers.Count)
-            _finalLayerNorm = Layers[idx++];
-
-        // Forecasting head
-        if (idx < Layers.Count)
-            _forecastHead = Layers[idx++];
-
-        // Reconstruction head (for anomaly detection / imputation)
-        if (idx < Layers.Count)
-            _reconstructionHead = Layers[idx++];
-
-        // Classification head (optional)
-        if (idx < Layers.Count)
-            _classificationHead = Layers[idx++];
+        return head;
     }
 
     /// <inheritdoc/>
@@ -699,36 +683,13 @@ public class MOMENT<T> : TimeSeriesFoundationModelBase<T>
         var normalized = ApplyInstanceNormalization(series);
         var encoded = ForwardEncoder(normalized);
 
-        // Mean pool over sequence dimension
-        int batchSize = encoded.Shape[0];
-        int seqDim = encoded.Shape.Length > 1 ? encoded.Shape[1] : 1;
-        int hiddenDim = encoded.Shape.Length > 2 ? encoded.Shape[2] : encoded.Length / (batchSize * seqDim);
-
-        var pooled = new Tensor<T>(new[] { batchSize, hiddenDim });
-        for (int b = 0; b < batchSize; b++)
-        {
-            for (int h = 0; h < hiddenDim; h++)
-            {
-                T sum = NumOps.Zero;
-                for (int s = 0; s < seqDim; s++)
-                {
-                    int idx = b * seqDim * hiddenDim + s * hiddenDim + h;
-                    if (idx < encoded.Length)
-                        sum = NumOps.Add(sum, encoded[idx]);
-                }
-                int dstIdx = b * hiddenDim + h;
-                if (dstIdx < pooled.Length)
-                    pooled.Data.Span[dstIdx] = NumOps.Divide(sum, NumOps.FromDouble(seqDim));
-            }
-        }
-
-        // Classification head
-        if (_classificationHead is not null)
-            return _classificationHead.Forward(pooled);
-
-        // No classification head available — cannot classify
-        throw new InvalidOperationException(
-            "Classification head is not initialized. Ensure the model was created with classification layers.");
+        // Lazily build the classification head (GlobalPooling + Dense(hiddenDim →
+        // numClasses)) per Goswami et al. 2024.
+        var head = GetOrBuildClassificationHead(numClasses);
+        var current = encoded;
+        foreach (var layer in head)
+            current = layer.Forward(current);
+        return current;
     }
 
     /// <inheritdoc/>
@@ -815,24 +776,14 @@ public class MOMENT<T> : TimeSeriesFoundationModelBase<T>
     /// </summary>
     private Tensor<T> ForwardNative(Tensor<T> input)
     {
-        var normalized = ApplyInstanceNormalization(input);
-        var encoded = ForwardEncoder(normalized);
-
-        // Apply task-specific head
-        if (_forecastHead is not null)
-            return _forecastHead.Forward(encoded);
-
-        return encoded;
-    }
-
-    /// <summary>
-    /// Runs the encoder portion only (patch embed + transformer layers + norm).
-    /// </summary>
-    private Tensor<T> ForwardEncoder(Tensor<T> input)
-    {
-        var current = input;
-
-        // Add batch dimension if needed
+        // MOMENT (Goswami et al., 2024) is an encoder-only transformer whose
+        // per-patch tokens feed a stack of self-attention + FFN blocks and a
+        // flatten + linear forecast head. The helper emits a flat,
+        // sequentially-composable Layers list (ReshapeLayer → DenseLayer
+        // (patch embed) → N × TransformerEncoderLayer (+ optional
+        // DropoutLayer) → FlattenLayer → DenseLayer (forecast head)), so
+        // ForwardNative is a straight sequential dispatch.
+        var current = ApplyInstanceNormalization(input);
         bool addedBatchDim = false;
         if (current.Rank == 1)
         {
@@ -840,24 +791,40 @@ public class MOMENT<T> : TimeSeriesFoundationModelBase<T>
             addedBatchDim = true;
         }
 
-        // Patch embedding
-        if (_patchEmbedding is not null)
-            current = _patchEmbedding.Forward(current);
-
-        // Transformer encoder layers
-        foreach (var layer in _transformerLayers)
-        {
+        foreach (var layer in Layers)
             current = layer.Forward(current);
-        }
-
-        // Final layer norm
-        if (_finalLayerNorm is not null)
-            current = _finalLayerNorm.Forward(current);
 
         if (addedBatchDim && current.Rank == 2 && current.Shape[0] == 1)
-        {
             current = current.Reshape(new[] { current.Shape[1] });
+
+        return current;
+    }
+
+    /// <summary>
+    /// Runs the encoder portion only (patches + transformer stack), stopping
+    /// before the forecast / reconstruction / classification head.
+    /// </summary>
+    private Tensor<T> ForwardEncoder(Tensor<T> input)
+    {
+        // The helper's last two layers are the flatten + forecast-head Dense.
+        // Walk Layers up to (but not including) the final Dense so the
+        // encoder output is [B, numPatches, hiddenDim]. Downstream heads
+        // (reconstruction / classification) are follow-up — they are not
+        // currently emitted by the helper, and the fields are null.
+        var current = input;
+        bool addedBatchDim = false;
+        if (current.Rank == 1)
+        {
+            current = current.Reshape(new[] { 1, current.Length });
+            addedBatchDim = true;
         }
+
+        int encoderEnd = Math.Max(0, Layers.Count - 2);
+        for (int i = 0; i < encoderEnd; i++)
+            current = Layers[i].Forward(current);
+
+        if (addedBatchDim && current.Rank == 2 && current.Shape[0] == 1)
+            current = current.Reshape(new[] { current.Shape[1] });
 
         return current;
     }
@@ -867,12 +834,12 @@ public class MOMENT<T> : TimeSeriesFoundationModelBase<T>
     /// </summary>
     private Tensor<T> ReconstructNative(Tensor<T> input)
     {
+        EnsureReconstructionHead();
         var encoded = ForwardEncoder(input);
-
-        if (_reconstructionHead is not null)
-            return _reconstructionHead.Forward(encoded);
-
-        return encoded;
+        var current = encoded;
+        foreach (var layer in _reconstructionHead!)
+            current = layer.Forward(current);
+        return current;
     }
 
     /// <summary>

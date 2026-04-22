@@ -20,6 +20,23 @@ public abstract class NeuralNetworkModelTestBase : IAsyncLifetime
     protected virtual int[] OutputShape => [1, 1];
     protected virtual int TrainingIterations => 10;
 
+    /// <summary>
+    /// Iteration count for the "short training" baseline in
+    /// <see cref="MoreData_ShouldNotDegrade"/>. Virtual so paper-scale
+    /// Foundation models can override down to something that fits the xUnit
+    /// 120s per-test timeout (ChronosBolt at ContextLength=512, 6+6 decoder-encoder
+    /// layers takes multiple seconds per iteration — 50 iterations = 250s+).
+    /// </summary>
+    protected virtual int MoreDataShortIterations => 50;
+
+    /// <summary>
+    /// Iteration count for the "long training" comparison in
+    /// <see cref="MoreData_ShouldNotDegrade"/>. Paired with
+    /// <see cref="MoreDataShortIterations"/>; the test asserts that longer
+    /// training does not worsen the loss. Virtual for the same reason.
+    /// </summary>
+    protected virtual int MoreDataLongIterations => 200;
+
     /// <inheritdoc />
     public virtual Task InitializeAsync() => Task.CompletedTask;
 
@@ -370,22 +387,39 @@ public abstract class NeuralNetworkModelTestBase : IAsyncLifetime
         var input2 = CreateRandomTensor(InputShape, rng2);
         var target2 = CreateRandomTensor(OutputShape, rng2);
 
-        // Train network1 for 50 iterations
-        for (int i = 0; i < 50; i++)
+        // Train network1 for the "short" iteration count (default 50)
+        int shortIters = MoreDataShortIterations;
+        int longIters = MoreDataLongIterations;
+
+        // Enforce the virtual contract: overrides must keep shortIters > 0
+        // (a zero-iteration "short" training is meaningless as a baseline)
+        // and longIters >= shortIters (the invariant is "more data → no
+        // worse loss"; it is only meaningful when the long-run is at least
+        // as long as the short-run).
+        Assert.True(shortIters > 0,
+            $"{nameof(MoreDataShortIterations)} must be > 0; got {shortIters}.");
+        Assert.True(longIters >= shortIters,
+            $"{nameof(MoreDataLongIterations)} ({longIters}) must be >= "
+            + $"{nameof(MoreDataShortIterations)} ({shortIters}) for the "
+            + "more-data-should-not-degrade invariant to make sense.");
+
+        for (int i = 0; i < shortIters; i++)
             network1.Train(input, target);
-        double loss50 = ComputeMSE(network1.Predict(input), target);
+        double lossShort = ComputeMSE(network1.Predict(input), target);
 
-        // Train network2 for 200 iterations
-        for (int i = 0; i < 200; i++)
+        // Train network2 for the "long" iteration count (default 200)
+        for (int i = 0; i < longIters; i++)
             network2.Train(input2, target2);
-        double loss200 = ComputeMSE(network2.Predict(input2), target2);
+        double lossLong = ComputeMSE(network2.Predict(input2), target2);
 
-        if (!double.IsNaN(loss50) && !double.IsNaN(loss200))
-        {
-            Assert.True(loss200 <= loss50 + MoreDataTolerance,
-                $"200 iterations loss ({loss200:F6}) > 50 iterations loss ({loss50:F6}). " +
-                "Optimizer may be diverging with more training.");
-        }
+        // Training divergence → NaN loss is the exact failure mode this invariant
+        // should catch. Fail fast instead of skipping the assertion.
+        Assert.False(double.IsNaN(lossShort) || double.IsNaN(lossLong),
+            $"Loss became NaN during training: short={lossShort}, long={lossLong}. " +
+            "This indicates gradient explosion or numerical instability in the optimizer path.");
+        Assert.True(lossLong <= lossShort + MoreDataTolerance,
+            $"{longIters} iterations loss ({lossLong:F6}) > {shortIters} iterations loss ({lossShort:F6}). " +
+            "Optimizer may be diverging with more training.");
     }
 
     // =====================================================

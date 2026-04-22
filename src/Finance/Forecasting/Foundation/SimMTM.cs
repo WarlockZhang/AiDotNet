@@ -66,10 +66,6 @@ public class SimMTM<T> : TimeSeriesFoundationModelBase<T>
     #region Fields
 
     private readonly bool _useNativeMode;
-    private ILayer<T>? _patchEmbedding;
-    private readonly List<ILayer<T>> _transformerLayers = [];
-    private ILayer<T>? _reconstructionHead;
-    private ILayer<T>? _forecastHead;
 
     private readonly IGradientBasedOptimizer<T, Tensor<T>, Tensor<T>> _optimizer;
     private readonly ILossFunction<T> _lossFunction;
@@ -195,42 +191,13 @@ public class SimMTM<T> : TimeSeriesFoundationModelBase<T>
         if (Architecture.Layers is not null && Architecture.Layers.Count > 0)
         {
             Layers.AddRange(Architecture.Layers);
-            ExtractLayerReferences();
         }
         else if (_useNativeMode)
         {
             Layers.AddRange(LayerHelper<T>.CreateDefaultSimMTMLayers(
                 Architecture, _contextLength, _forecastHorizon, _patchLength,
                 _hiddenDimension, _numLayers, _numHeads, _dropout));
-            ExtractLayerReferences();
         }
-    }
-
-    private void ExtractLayerReferences()
-    {
-        int idx = 0;
-        // SimMTM block layout: norm(1) + attn(2) + norm(1) + FFN(2) = 6; with dropout: +2 = 8
-        int layersPerBlock = _dropout > 0 ? 8 : 6;
-
-        if (idx < Layers.Count)
-            _patchEmbedding = Layers[idx++];
-
-        _transformerLayers.Clear();
-        int totalTransformerLayers = _numLayers * layersPerBlock;
-        for (int i = 0; i < totalTransformerLayers && idx < Layers.Count; i++)
-            _transformerLayers.Add(Layers[idx++]);
-
-        if (idx < Layers.Count)
-            _reconstructionHead = Layers[idx++];
-
-        if (idx < Layers.Count)
-            _forecastHead = Layers[idx++];
-
-        // Validate critical references were extracted
-        int expectedLayers = 1 + totalTransformerLayers + 2; // patch + transformer + reconstruction + forecast
-        if (Layers.Count < expectedLayers)
-            System.Diagnostics.Debug.WriteLine(
-                $"SimMTM: Expected {expectedLayers} layers but found {Layers.Count}. Some layer references may be null.");
     }
 
     #endregion
@@ -461,6 +428,214 @@ public class SimMTM<T> : TimeSeriesFoundationModelBase<T>
 
     #endregion
 
+    #region Similarity-Weighted Masked Pretraining (Dong et al. 2023)
+
+    /// <summary>
+    /// Performs one SimMTM similarity-weighted masked-reconstruction pretraining forward
+    /// pass per Dong et al. 2023. Randomly masks a fraction of input patches, runs the
+    /// transformer encoder, then reconstructs each masked patch as a similarity-weighted
+    /// aggregation over UNMASKED patches' hidden states (rather than a plain dense
+    /// projection). Similarity is cosine-similarity with softmax-temperature scaling.
+    /// </summary>
+    /// <param name="input">Input time series of shape [B, contextLength] or [contextLength].</param>
+    /// <param name="seed">Optional seed for reproducible masking.</param>
+    /// <returns>
+    /// A tuple <c>(reconstructed, patchMask)</c> where <c>reconstructed</c> is the full
+    /// signal predicted by similarity-weighted aggregation and <c>patchMask</c> is a
+    /// binary [B, numPatches] tensor with 1 at masked positions.
+    /// </returns>
+    public (Tensor<T> reconstructed, Tensor<T> patchMask) PretrainSimilarityWeightedReconstruction(
+        Tensor<T> input, int? seed = null)
+    {
+        if (!_useNativeMode)
+            throw new InvalidOperationException(
+                "Similarity pretraining requires native mode.");
+        if (input is null) throw new ArgumentNullException(nameof(input));
+
+        // Validate input geometry before we index with b * _contextLength + ...
+        // A bad shape would otherwise walk past input.Data.Span.
+        if (_patchLength <= 0)
+            throw new InvalidOperationException("PatchLength must be positive.");
+        if (_contextLength <= 0 || _contextLength % _patchLength != 0)
+            throw new InvalidOperationException(
+                $"ContextLength ({_contextLength}) must be positive and divisible by PatchLength ({_patchLength}).");
+        if (input.Rank != 1 && input.Rank != 2)
+            throw new ArgumentException(
+                $"SimMTM pretraining expects rank-1 or rank-2 input; got rank {input.Rank}, shape "
+                + $"[{string.Join(", ", input.Shape.ToArray())}].",
+                nameof(input));
+        int trailingDim = input.Shape[input.Rank - 1];
+        if (trailingDim != _contextLength)
+            throw new ArgumentException(
+                $"SimMTM pretraining expects each sample to have length {_contextLength}; got shape "
+                + $"[{string.Join(", ", input.Shape.ToArray())}].",
+                nameof(input));
+
+        bool addedBatch = false;
+        if (input.Rank == 1)
+        {
+            input = input.Reshape(new[] { 1, input.Length });
+            addedBatch = true;
+        }
+        int batchSize = input.Shape[0];
+        int numPatches = _contextLength / _patchLength;
+
+        // Build patch-level mask [B, numPatches]: 1 = masked, 0 = visible.
+        var rng = seed.HasValue
+            ? RandomHelper.CreateSeededRandom(seed.Value)
+            : RandomHelper.CreateSecureRandom();
+        var patchMask = new Tensor<T>(new[] { batchSize, numPatches });
+        int maskedCount = Math.Max(1, Math.Min(numPatches - 1, (int)Math.Round(numPatches * _maskRatio)));
+        for (int b = 0; b < batchSize; b++)
+        {
+            var indices = Enumerable.Range(0, numPatches).ToList();
+            for (int i = indices.Count - 1; i > 0; i--)
+            {
+                int j = rng.Next(i + 1);
+                (indices[i], indices[j]) = (indices[j], indices[i]);
+            }
+            for (int m = 0; m < maskedCount; m++)
+                patchMask.Data.Span[b * numPatches + indices[m]] = NumOps.One;
+        }
+
+        // Apply mask: zero out masked patches.
+        var masked = new Tensor<T>(input._shape);
+        for (int b = 0; b < batchSize; b++)
+        {
+            for (int p = 0; p < numPatches; p++)
+            {
+                bool isMasked = !NumOps.Equals(patchMask.Data.Span[b * numPatches + p], NumOps.Zero);
+                for (int t = 0; t < _patchLength; t++)
+                {
+                    int idx = b * _contextLength + p * _patchLength + t;
+                    masked.Data.Span[idx] = isMasked ? NumOps.Zero : input.Data.Span[idx];
+                }
+            }
+        }
+
+        // Walk encoder up to (but not including) the final two heads (Flatten + Dense
+        // reconstruction + Dense forecast). The layer just before Flatten is the last
+        // TransformerEncoderLayer output — our [B, numPatches, hiddenDim] hidden states.
+        var current = ApplyInstanceNormalization(masked);
+        int encoderEnd = Layers.Count - 3; // skip Flatten, Dense(recon), Dense(forecast)
+        for (int i = 0; i < encoderEnd; i++)
+            current = Layers[i].Forward(current);
+        var hidden = current; // [B, numPatches, hiddenDim]
+
+        // Similarity-weighted aggregation per Dong et al. 2023 §3.2: for each
+        // masked patch i in series b, reconstruct its hidden state as a
+        // softmax-weighted sum over VISIBLE peers drawn from the full batch
+        // (cross-series when batchSize > 1, degenerating to intra-series when
+        // batchSize == 1). Each candidate (bj, pj) contributes its hidden
+        // vector weighted by cosine(h_{b,pi}, h_{bj,pj}) / tau.
+        double tau = _similarityTemperature > 0 ? _similarityTemperature : 0.1;
+        var aggregated = new Tensor<T>(hidden._shape);
+        int totalPositions = batchSize * numPatches;
+        var scores = new double[totalPositions];
+        var weights = new double[totalPositions];
+        for (int b = 0; b < batchSize; b++)
+        {
+            for (int pi = 0; pi < numPatches; pi++)
+            {
+                // Only MASKED patches get reconstructed from visible peers per
+                // Dong et al. 2023. Visible patches pass through unchanged so
+                // the reconstruction loss doesn't drive the model to overwrite
+                // uncorrupted evidence with a similarity-weighted blur.
+                int queryIdx = b * numPatches + pi;
+                bool isMasked = !NumOps.Equals(patchMask.Data.Span[queryIdx], NumOps.Zero);
+                if (!isMasked)
+                {
+                    for (int h = 0; h < _hiddenDimension; h++)
+                        aggregated.Data.Span[queryIdx * _hiddenDimension + h] =
+                            hidden.Data.Span[queryIdx * _hiddenDimension + h];
+                    continue;
+                }
+
+                double normI = 0;
+                for (int h = 0; h < _hiddenDimension; h++)
+                {
+                    double v = NumOps.ToDouble(hidden.Data.Span[(b * numPatches + pi) * _hiddenDimension + h]);
+                    normI += v * v;
+                }
+                normI = Math.Sqrt(normI) + 1e-8;
+
+                double maxScore = double.NegativeInfinity;
+                for (int bj = 0; bj < batchSize; bj++)
+                {
+                    for (int pj = 0; pj < numPatches; pj++)
+                    {
+                        int idx = bj * numPatches + pj;
+                        // Skip self-position so a masked query does not attend to itself.
+                        if (bj == b && pj == pi) { scores[idx] = double.NegativeInfinity; continue; }
+                        // Only aggregate over VISIBLE patches (mask == 0) across the full batch.
+                        if (!NumOps.Equals(patchMask.Data.Span[idx], NumOps.Zero))
+                        {
+                            scores[idx] = double.NegativeInfinity;
+                            continue;
+                        }
+                        double dot = 0, normJ = 0;
+                        for (int h = 0; h < _hiddenDimension; h++)
+                        {
+                            double vi = NumOps.ToDouble(hidden.Data.Span[(b * numPatches + pi) * _hiddenDimension + h]);
+                            double vj = NumOps.ToDouble(hidden.Data.Span[idx * _hiddenDimension + h]);
+                            dot += vi * vj;
+                            normJ += vj * vj;
+                        }
+                        normJ = Math.Sqrt(normJ) + 1e-8;
+                        scores[idx] = dot / (normI * normJ) / tau;
+                        if (scores[idx] > maxScore) maxScore = scores[idx];
+                    }
+                }
+
+                // Softmax over visible peers.
+                double denom = 0;
+                for (int k = 0; k < totalPositions; k++)
+                {
+                    if (double.IsNegativeInfinity(scores[k])) { weights[k] = 0; continue; }
+                    weights[k] = Math.Exp(scores[k] - maxScore);
+                    denom += weights[k];
+                }
+                if (denom < 1e-12)
+                {
+                    // All peers masked (pathological). Fall back to self-hidden.
+                    for (int h = 0; h < _hiddenDimension; h++)
+                        aggregated.Data.Span[(b * numPatches + pi) * _hiddenDimension + h] =
+                            hidden.Data.Span[(b * numPatches + pi) * _hiddenDimension + h];
+                    continue;
+                }
+                for (int k = 0; k < totalPositions; k++)
+                    weights[k] /= denom;
+
+                // Weighted sum of visible peers' hidden states (cross-batch + cross-patch).
+                for (int h = 0; h < _hiddenDimension; h++)
+                {
+                    double agg = 0;
+                    for (int k = 0; k < totalPositions; k++)
+                    {
+                        if (weights[k] == 0) continue;
+                        agg += weights[k] * NumOps.ToDouble(hidden.Data.Span[k * _hiddenDimension + h]);
+                    }
+                    aggregated.Data.Span[(b * numPatches + pi) * _hiddenDimension + h] = NumOps.FromDouble(agg);
+                }
+            }
+        }
+
+        // Feed the aggregated hidden states through the reconstruction head (the
+        // three remaining layers: Flatten + Dense + Dense). We want just the
+        // reconstruction (skip the last forecast Dense).
+        var reconIn = Layers[encoderEnd].Forward(aggregated);       // Flatten
+        var reconOut = Layers[encoderEnd + 1].Forward(reconIn);     // Dense(reconstruction)
+
+        if (addedBatch && reconOut.Rank == 2 && reconOut.Shape[0] == 1)
+            reconOut = reconOut.Reshape(new[] { reconOut.Shape[1] });
+        if (addedBatch)
+            patchMask = patchMask.Reshape(new[] { numPatches });
+
+        return (reconOut, patchMask);
+    }
+
+    #endregion
+
     #region Forward/Backward Pass
 
     private Tensor<T> ForwardNative(Tensor<T> input)
@@ -475,17 +650,11 @@ public class SimMTM<T> : TimeSeriesFoundationModelBase<T>
             addedBatchDim = true;
         }
 
-        if (_patchEmbedding is not null)
-            current = _patchEmbedding.Forward(current);
-
-        foreach (var layer in _transformerLayers)
+        // Helper emits a flat Layers list: Reshape → Dense(patch) → N ×
+        // TransformerEncoderLayer (+ optional Dropout) → Flatten →
+        // Dense(reconstruction head) → Dense(forecast head).
+        foreach (var layer in Layers)
             current = layer.Forward(current);
-
-        if (_reconstructionHead is not null)
-            current = _reconstructionHead.Forward(current);
-
-        if (_forecastHead is not null)
-            current = _forecastHead.Forward(current);
 
         if (addedBatchDim && current.Rank == 2 && current.Shape[0] == 1)
             current = current.Reshape(new[] { current.Shape[1] });

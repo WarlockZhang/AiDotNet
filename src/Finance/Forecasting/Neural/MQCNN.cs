@@ -567,18 +567,46 @@ public class MQCNN<T> : ForecastingModelBase<T>
                 throw new InvalidOperationException(
                     $"MQCNN output length {predFlat.Length} is smaller than horizon*quantiles " +
                     $"({horizon}*{numQ}={total}); check _forecastHorizon / _quantiles.");
+            // The network's head is expected to emit exactly horizon*numQ
+            // elements (either rank-2 [horizon, numQ] or a rank-1 flat buffer
+            // of that length). A longer output means the head is returning a
+            // rank-3 [batch, seq, numQ] or similar and we have no
+            // deterministic rule for which window to train against — slicing
+            // the first elements would silently discard the forecast window
+            // and train against the past. Fail loudly so the head shape gets
+            // fixed upstream.
+            if (predFlat.Length > total)
+            {
+                throw new InvalidOperationException(
+                    $"MQCNN output length {predFlat.Length} exceeds horizon*quantiles "
+                    + $"({horizon}*{numQ}={total}); shape=[{string.Join(",", predFlat.Shape.ToArray())}]. "
+                    + "The output head must project to exactly horizon*numQuantiles elements — "
+                    + "a larger tensor is ambiguous (which window is the forecast?) and would "
+                    + "silently train against the wrong slice.");
+            }
             predFlat = Engine.Reshape(predFlat, new[] { horizon, numQ });
         }
 
-        // Align target to [horizon]. A flat [horizon]-length target is
-        // the common case; anything else gets trimmed to the first
-        // `horizon` elements and reshaped so the broadcast subtract
-        // below remains tape-aware.
+        // Align target to [horizon]. Target MUST carry exactly `horizon`
+        // elements — mismatched lengths mean the caller is passing a
+        // different horizon or a batched target, and silently truncating
+        // would optimize against the wrong window.
         Tensor<T> targetVec;
         if (target.Rank == 1 && target.Length == horizon)
+        {
             targetVec = target;
-        else
+        }
+        else if (target.Length == horizon)
+        {
             targetVec = Engine.Reshape(target, new[] { horizon });
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"MQCNN target length {target.Length} (shape=[{string.Join(",", target.Shape.ToArray())}]) "
+                + $"does not match horizon {horizon}. The caller must pass exactly horizon elements — "
+                + "silently slicing would train against the wrong window.");
+        }
 
         // Accumulate per-quantile pinball losses.
         Tensor<T>? totalLoss = null;
