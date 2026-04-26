@@ -237,6 +237,18 @@ public class GraphGenerationModel<T> : NeuralNetworkBase<T>
         KLWeight = klWeight;
 
         _lossFunction = lossFunction ?? new BinaryCrossEntropyLoss<T>();
+        // Train(input, expectedOutput) needs a tape-capable loss to call
+        // ComputeTapeLoss; reject anything narrower up front so invalid
+        // configurations fail at construction with a clear message instead
+        // of throwing mid-training when the user has already paid the cost
+        // of the forward pass.
+        if (_lossFunction is not LossFunctions.LossFunctionBase<T>)
+        {
+            throw new ArgumentException(
+                "GraphGenerationModel requires a tape-capable loss function. " +
+                $"Pass a LossFunctionBase<T> implementation (got {_lossFunction.GetType().Name}).",
+                nameof(lossFunction));
+        }
         var adamOpts = new AdamOptimizerOptions<T, Tensor<T>, Tensor<T>>
         {
             InitialLearningRate = 0.001,
@@ -364,7 +376,14 @@ public class GraphGenerationModel<T> : NeuralNetworkBase<T>
         // through reparameterization into the encoder weights (epsilon is
         // detached noise, no gradient needed for it).
         var halfLogVar = Engine.TensorMultiplyScalar(logVar, NumOps.FromDouble(0.5));
-        var std = Engine.TensorExp(halfLogVar);
+        // Bound halfLogVar before exponentiating so a runaway encoder (e.g.,
+        // poorly-initialized weights early in training) can't push exp into
+        // Inf/NaN and poison both the reparameterization output and the
+        // downstream KL term. [-15, 15] keeps std ∈ [~3e-7, ~3.3e6], which
+        // covers any realistic VAE latent scale; the clamp is engine-side
+        // so gradients still flow back to the encoder for unsaturated values.
+        var clampedHalfLogVar = Engine.TensorClamp(halfLogVar, NumOps.FromDouble(-15.0), NumOps.FromDouble(15.0));
+        var std = Engine.TensorExp(clampedHalfLogVar);
 
         // Sample epsilon (detached): no tape needed for the noise term.
         var epsilon = new Tensor<T>(mean._shape);
@@ -534,47 +553,44 @@ public class GraphGenerationModel<T> : NeuralNetworkBase<T>
         int epochs = 200,
         double learningRate = 0.01)
     {
-        var lr = NumOps.FromDouble(learningRate);
-
-        for (int epoch = 0; epoch < epochs; epoch++)
+        // Validate learningRate BEFORE the training loop so an unsupported
+        // value is rejected side-effect free. The previous order threw
+        // after epochs had already updated weights, leaving the caller
+        // with both an exception and a partially-trained model.
+        // Honoring a per-call learningRate would require threading an
+        // optimizer factory through Train(input, expectedOutput) so that
+        // path can build a fresh optimizer instead of using the configured
+        // _optimizer. That refactor is intentionally out of scope here.
+        const double defaultLearningRate = 0.01;
+        if (Math.Abs(learningRate - defaultLearningRate) > double.Epsilon)
         {
-            // Set to training mode
-            foreach (var layer in Layers)
-            {
-                layer.SetTrainingMode(true);
-            }
-
-            // Forward pass
-            var reconstructed = Forward(nodeFeatures, adjacencyMatrix);
-
-            // Compute reconstruction gradient
-            var reconGrad = ComputeReconstructionGradient(reconstructed, adjacencyMatrix);
-
-            // Backward pass
-
-            // Update encoder parameters
-            foreach (var layer in Layers)
-            {
-                layer.UpdateParameters(lr);
-            }
-
-            // Update variational layer parameters
-            if (_meanWeightsGradient != null)
-            {
-                _meanWeights = Engine.TensorSubtract(_meanWeights,
-                    Engine.TensorMultiplyScalar(_meanWeightsGradient, lr));
-            }
-            if (_logVarWeightsGradient != null)
-            {
-                _logVarWeights = Engine.TensorSubtract(_logVarWeights,
-                    Engine.TensorMultiplyScalar(_logVarWeightsGradient, lr));
-            }
+            throw new NotSupportedException(
+                $"GraphGenerationModel.Train does not currently apply per-call " +
+                $"learning rates (got {learningRate}). Configure the optimizer " +
+                $"passed to the constructor instead, or omit this argument to " +
+                $"accept the default ({defaultLearningRate}).");
         }
 
-        // Set to inference mode
-        foreach (var layer in Layers)
+        // The previous implementation walked an alternative gradient path
+        // (ComputeReconstructionGradient + per-layer UpdateParameters) that
+        // never wired the reconstruction gradient back into the variational
+        // weight gradients — Adam saw an all-zero gradient and parameters
+        // never moved. Route through the same tape-based training step the
+        // single-step Train(input, expectedOutput) uses, passing the explicit
+        // adjacencyMatrix as the reconstruction target. We deliberately do
+        // NOT mutate _autoAdjacencyMatrix here: doing so leaked the training
+        // adjacency into subsequent Predict calls on same-sized graphs.
+        try
         {
-            layer.SetTrainingMode(false);
+            for (int epoch = 0; epoch < epochs; epoch++)
+            {
+                Train(nodeFeatures, adjacencyMatrix);
+            }
+        }
+        finally
+        {
+            foreach (var layer in Layers)
+                layer.SetTrainingMode(false);
         }
     }
 
@@ -912,7 +928,25 @@ public class GraphGenerationModel<T> : NeuralNetworkBase<T>
             input = input.Reshape([1, input.Shape[0]]);
 
         int numNodes = input.Shape[0];
-        var adjacencyMatrix = EnsureAdjacencyMatrix(numNodes);
+
+        // The reconstruction target is the caller-supplied adjacency matrix.
+        // Previously this method ignored expectedOutput and silently smuggled
+        // the target through _autoAdjacencyMatrix, so direct callers ended up
+        // optimizing against an all-ones fallback. Validate the shape up front
+        // so misuse (e.g., passing per-sample labels) fails with a clear
+        // message instead of producing nonsense gradients.
+        if (expectedOutput is null)
+            throw new ArgumentNullException(nameof(expectedOutput));
+        if (expectedOutput.Rank != 2
+            || expectedOutput.Shape[0] != numNodes
+            || expectedOutput.Shape[1] != numNodes)
+        {
+            throw new ArgumentException(
+                $"expectedOutput must be a [{numNodes}, {numNodes}] adjacency matrix; " +
+                $"got shape [{string.Join(", ", expectedOutput.Shape)}].",
+                nameof(expectedOutput));
+        }
+        var adjacencyMatrix = expectedOutput;
 
         foreach (var layer in Layers)
             layer.SetTrainingMode(true);
@@ -932,11 +966,13 @@ public class GraphGenerationModel<T> : NeuralNetworkBase<T>
         var latent = Reparameterize(mean, logVar);
         var reconstructed = Decode(latent);
 
-        // Reconstruction loss via a standard BCE loss function that we
-        // know backpropagates correctly on the tape. BinaryCrossEntropy
-        // handles the ε-clamp and log internally.
-        var bceLoss = new LossFunctions.BinaryCrossEntropyLoss<T>();
-        var reconLoss = bceLoss.ComputeTapeLoss(reconstructed, adjacencyMatrix);
+        // Reconstruction loss via the configured loss function. Defaults
+        // to BinaryCrossEntropy (paper-faithful for VGAE; ε-clamp + log
+        // handled internally) when the caller didn't supply one. The
+        // constructor enforces LossFunctionBase<T> so this cast cannot
+        // fail at runtime.
+        var tapeLoss = (LossFunctions.LossFunctionBase<T>)_lossFunction;
+        var reconLoss = tapeLoss.ComputeTapeLoss(reconstructed, adjacencyMatrix);
 
         // KL divergence to N(0, I) per Kipf & Welling 2016 §3.2:
         //   KL = 0.5 * Σ (exp(logVar) + μ² - 1 - logVar)
@@ -949,7 +985,14 @@ public class GraphGenerationModel<T> : NeuralNetworkBase<T>
         var klTerms = Engine.TensorSubtract<T>(minusOne, logVar);
         var klAxes = Enumerable.Range(0, klTerms.Shape.Length).ToArray();
         var klSum = Engine.ReduceSum<T>(klTerms, klAxes, keepDims: false);
-        var klLoss = Engine.TensorMultiplyScalar<T>(klSum, NumOps.FromDouble(0.5));
+        // Average per element to match ComputeKLDivergence() / ComputeLoss()
+        // which return a per-element mean. Without this normalization, larger
+        // graphs / latent sizes scale the KL term linearly while BCE stays
+        // averaged, so the training objective drifts from what the inference-
+        // path metrics report.
+        int klElements = Math.Max(1, mean.Length);
+        var klScale = NumOps.FromDouble(0.5 / klElements);
+        var klLoss = Engine.TensorMultiplyScalar<T>(klSum, klScale);
 
         // L = L_recon + β · L_KL. β = KLWeight matches the warmup /
         // annealing constant the paper suggests for VGAE training.
@@ -989,28 +1032,41 @@ public class GraphGenerationModel<T> : NeuralNetworkBase<T>
                     gradList.Add(NumOps.Zero);
             }
         }
+        // Variational weight gradients: append to the flat vector AND
+        // persist the tensor-shaped gradients on _meanWeightsGradient /
+        // _logVarWeightsGradient so GetParameterGradients() returns the
+        // real numbers instead of the all-zero defaults. Without this
+        // persist step, callers walking GetParameterGradients() saw
+        // zeros even though the optimizer step had moved the weights.
         if (allGrads.TryGetValue(_meanWeights, out var mg))
         {
             for (int i = 0; i < mg.Length; i++) gradList.Add(mg.GetFlat(i));
+            _meanWeightsGradient = mg;
         }
         else
         {
             for (int i = 0; i < _meanWeights.Length; i++) gradList.Add(NumOps.Zero);
+            _meanWeightsGradient = new Tensor<T>(_meanWeights._shape);
         }
         if (allGrads.TryGetValue(_logVarWeights, out var lvg))
         {
             for (int i = 0; i < lvg.Length; i++) gradList.Add(lvg.GetFlat(i));
+            _logVarWeightsGradient = lvg;
         }
         else
         {
             for (int i = 0; i < _logVarWeights.Length; i++) gradList.Add(NumOps.Zero);
+            _logVarWeightsGradient = new Tensor<T>(_logVarWeights._shape);
         }
 
         var parameterGradients = new Vector<T>(gradList.ToArray());
 
-        var stepOptimizer = new AdamOptimizer<T, Tensor<T>, Tensor<T>>(this);
+        // Use the configured _optimizer so Adam momentum / scheduler state
+        // accumulates across batches. The previous code created a fresh
+        // optimizer per step, which silently reset moments to zero and made
+        // training behave like plain SGD with momentum=0.
         var currentParameters = GetParameters();
-        var updatedParameters = stepOptimizer.UpdateParameters(currentParameters, parameterGradients);
+        var updatedParameters = _optimizer.UpdateParameters(currentParameters, parameterGradients);
         UpdateParameters(updatedParameters);
     }
 

@@ -254,7 +254,10 @@ public class CalibratedProbabilityFitDetector<T, TInput, TOutput> : FitDetectorB
                     // bugs behind seemingly-valid calibration numbers.
                     // Fail fast with both the sample index and the
                     // legal range so the caller can fix the pipeline
-                    // instead of shipping garbage metrics.
+                    // instead of shipping garbage metrics. If 'actual'
+                    // contains probabilities rather than class indices,
+                    // flatten it to match 'predicted' length so the
+                    // binary calibration path is selected instead.
                     throw new InvalidOperationException(
                         $"CalibratedProbabilityFitDetector: class label at sample {i} is out of range. " +
                         $"Received {classIdx}, expected [0, {numClasses - 1}].");

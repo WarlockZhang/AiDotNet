@@ -252,12 +252,12 @@ public class GaussianProcessRegression<T> : NonLinearRegressionBase<T>
     }
 
     /// <summary>
-    /// Solves (K + σ²I) α = y with progressive jitter doubling on Cholesky
-    /// failure per Rasmussen &amp; Williams 2006 §2.2 numerical-stability note.
-    /// Each retry adds extra jitter to the diagonal and re-attempts. After
-    /// 6 retries (up to 10^6-fold jitter boost) falls back to a rank-
-    /// revealing QR that works on any full-rank matrix without a PD
-    /// precondition.
+    /// Solves (K + σ²I) α = y with progressive jitter escalation (×10 per
+    /// retry) on Cholesky failure per Rasmussen &amp; Williams 2006 §2.2
+    /// numerical-stability note. Each retry adds 10× the previous jitter
+    /// to the diagonal and re-attempts. After 6 retries (up to 10^6-fold
+    /// jitter boost) falls back to a rank-revealing QR that works on any
+    /// full-rank matrix without a PD precondition.
     /// </summary>
     private Vector<T> SolveWithJitterRetry(Matrix<T> K, Vector<T> y, MatrixDecompositionType preferredType)
     {
@@ -270,7 +270,16 @@ public class GaussianProcessRegression<T> : NonLinearRegressionBase<T>
             {
                 return MatrixSolutionHelper.SolveLinearSystem(K, y, preferredType);
             }
-            catch (ArgumentException ex) when (ex.Message.Contains("positive definite") || ex.Message.Contains("singular"))
+            // This matches MatrixSolutionHelper.SolveLinearSystem's specific
+            // ArgumentException messages for non-PD / singular matrices.
+            // If those messages change (rewording, localization), update
+            // the substring set here — failing to match falls through to
+            // the throw rather than retrying with jitter, so the
+            // dependency is fragile but not silent. Case-insensitive
+            // match guards against minor capitalization drift.
+            catch (ArgumentException ex) when (
+                ex.Message.IndexOf("positive definite", StringComparison.OrdinalIgnoreCase) >= 0
+                || ex.Message.IndexOf("singular", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 if (attempt == maxRetries)
                 {
@@ -278,11 +287,16 @@ public class GaussianProcessRegression<T> : NonLinearRegressionBase<T>
                     // without PD requirement. Slower but robust.
                     return MatrixSolutionHelper.SolveLinearSystem(K, y, MatrixDecompositionType.Qr);
                 }
-                // Bump diagonal jitter by 10x for the next attempt (increment
-                // is the delta between current cumulative jitter and next).
-                double nextJitter = baseNoise * Math.Pow(10, attempt + 1);
-                double currentJitter = attempt == 0 ? 0 : baseNoise * Math.Pow(10, attempt);
-                T delta = NumOps.FromDouble(nextJitter - currentJitter);
+                // Bump diagonal jitter by 10x for the next attempt. K already
+                // includes the base noise (added at Lines 209 / 214-217 before
+                // we got here), so the previous total at attempt 0 is baseNoise
+                // (not zero). Computing the delta as `next - previous` keeps
+                // the cumulative schedule at exactly baseNoise × 10^k after
+                // retry k; the previous code's "zero at attempt 0" gave 11×
+                // after retry 1 instead of 10×.
+                double targetTotalJitter   = baseNoise * Math.Pow(10, attempt + 1);
+                double previousTotalJitter = baseNoise * Math.Pow(10, attempt);
+                T delta = NumOps.FromDouble(targetTotalJitter - previousTotalJitter);
                 for (int i = 0; i < n; i++)
                     K[i, i] = NumOps.Add(K[i, i], delta);
             }
