@@ -6,29 +6,33 @@ namespace AiDotNetTestConsole;
 
 class Program
 {
+    // Bottleneck-profiling entry points: each key matches a CLI arg
+    // passed under dotnet-trace to collect CPU samples against a
+    // single model at research-paper defaults. Adding a new profile
+    // now means one line here instead of a new `if (args[0] == …)`
+    // block below.
+    private static readonly Dictionary<string, Action> ProfileModes = new()
+    {
+        ["chronosbolt-profile"] = ChronosBoltProfile.Run,
+        ["timemoe-profile"]     = TimeMoEProfile.Run,
+        ["timesfm-profile"]     = TimesFMProfile.Run,
+        ["moment-profile"]      = MOMENTProfile.Run,
+        ["lstmvae-profile"]     = LSTMVAEProfile.Run,
+        ["deepant-profile"]     = DeepANTProfile.Run,
+        ["nbeats-profile"]      = NBEATSProfile.Run,
+        ["autoformer-profile"]  = AutoformerProfile.Run,
+        ["resnet50-profile"]    = ResNet50Profile.Run,
+        ["clone-diag"]          = CloneDiag.Run,
+        ["ngboost-profile"]     = NGBoostProfile.Run,
+        ["svc-profile"]         = SVCProfile.Run,
+        ["vec-inspect"]         = VecInspect.Run,
+    };
+
     static async Task Main(string[] args)
     {
-        // Bottleneck-profiling mode: run a single model at research-paper
-        // defaults and exit. Invoked under dotnet-trace to collect CPU
-        // samples for PR #1182 perf investigation.
-        if (args.Length > 0 && args[0] == "chronosbolt-profile")
+        if (args.Length > 0 && ProfileModes.TryGetValue(args[0], out var profile))
         {
-            ChronosBoltProfile.Run();
-            return;
-        }
-        if (args.Length > 0 && args[0] == "timemoe-profile")
-        {
-            TimeMoEProfile.Run();
-            return;
-        }
-        if (args.Length > 0 && args[0] == "timesfm-profile")
-        {
-            TimesFMProfile.Run();
-            return;
-        }
-        if (args.Length > 0 && args[0] == "moment-profile")
-        {
-            MOMENTProfile.Run();
+            profile();
             return;
         }
 

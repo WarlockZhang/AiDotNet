@@ -179,6 +179,23 @@ public class NeuralNetworkArchitecture<T>
     public int InputDepth { get; }
 
     /// <summary>
+    /// Gets the frame-count dimension for 4D (temporal video) inputs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For <see cref="Enums.InputType.FourDimensional"/> inputs, this property specifies
+    /// the number of frames in the video clip fed as a single sample. The full input shape
+    /// is <c>[InputFrames, InputDepth, InputHeight, InputWidth]</c>.
+    /// </para>
+    /// <para>
+    /// <b>For Beginners:</b> The frame count — how many video frames the model looks at in
+    /// one go. Typical short-clip defaults for frame-interpolation / video-denoising /
+    /// video-super-resolution models are 4–16 frames.
+    /// </para>
+    /// </remarks>
+    public int InputFrames { get; private set; }
+
+    /// <summary>
     /// Gets the dimensionality of image embeddings for multimodal networks.
     /// </summary>
     /// <remarks>
@@ -325,8 +342,20 @@ public class NeuralNetworkArchitecture<T>
     /// </para>
     /// </remarks>
     public int InputDimension =>
-        InputType == InputType.OneDimensional ? 1 :
-        InputType == InputType.TwoDimensional ? 2 : 3;
+        InputType switch
+        {
+            InputType.OneDimensional => 1,
+            InputType.TwoDimensional => 2,
+            InputType.ThreeDimensional => 3,
+            InputType.FourDimensional => 4,
+            // Fail fast on invalid / deserialized-garbage enum values
+            // instead of silently coercing to 3D — a wrong dimensionality
+            // propagates into every downstream layer's shape arithmetic
+            // and is nearly impossible to diagnose after the fact.
+            _ => throw new InvalidOperationException(
+                $"Invalid InputType enum value '{InputType}' in InputDimension. " +
+                "Expected One/Two/Three/FourDimensional.")
+        };
 
     /// <summary>
     /// Gets the calculated total size of the input based on dimensions.
@@ -355,6 +384,7 @@ public class NeuralNetworkArchitecture<T>
             InputType.OneDimensional => InputSize > 0 ? InputSize : throw new InvalidOperationException("InputSize must be set for OneDimensional input."),
             InputType.TwoDimensional => InputHeight * InputWidth,
             InputType.ThreeDimensional => InputHeight * InputWidth * InputDepth,
+            InputType.FourDimensional => InputFrames * InputHeight * InputWidth * InputDepth,
             _ => throw new InvalidOperationException("Invalid InputDimensionality"),
         };
 
@@ -445,7 +475,8 @@ public class NeuralNetworkArchitecture<T>
         List<ILayer<T>>? layers = null,
         bool shouldReturnFullSequence = false,
         int imageEmbeddingDim = 0,
-        int textEmbeddingDim = 0)
+        int textEmbeddingDim = 0,
+        int inputFrames = 0)
     {
         InputType = inputType;
         TaskType = taskType;
@@ -454,6 +485,7 @@ public class NeuralNetworkArchitecture<T>
         InputHeight = inputHeight;
         InputWidth = inputWidth;
         InputDepth = inputDepth;
+        InputFrames = inputFrames;
         ShouldReturnFullSequence = shouldReturnFullSequence;
         if (layers != null)
         {
@@ -643,6 +675,7 @@ public class NeuralNetworkArchitecture<T>
             InputType.OneDimensional => [InputSize],
             InputType.TwoDimensional => [InputHeight, InputWidth],
             InputType.ThreeDimensional => [InputDepth, InputHeight, InputWidth],
+            InputType.FourDimensional => [InputFrames, InputDepth, InputHeight, InputWidth],
             _ => throw new InvalidOperationException("Invalid InputDimensionality"),
         };
     }
@@ -927,6 +960,13 @@ public class NeuralNetworkArchitecture<T>
                 }
                 break;
 
+            case InputType.FourDimensional:
+                if (InputFrames <= 0 || InputDepth <= 0 || InputHeight <= 0 || InputWidth <= 0)
+                {
+                    throw new ArgumentException("InputFrames, InputDepth, InputHeight, and InputWidth must all be greater than 0 for FourDimensional (temporal video) input.");
+                }
+                break;
+
             default:
                 throw new ArgumentException("Invalid InputDimensionality specified.");
         }
@@ -937,6 +977,7 @@ public class NeuralNetworkArchitecture<T>
             InputType.OneDimensional => InputSize,
             InputType.TwoDimensional => InputHeight * InputWidth,
             InputType.ThreeDimensional => InputHeight * InputWidth * InputDepth,
+            InputType.FourDimensional => InputFrames * InputHeight * InputWidth * InputDepth,
             _ => throw new InvalidOperationException("Invalid InputDimensionality"),
         };
 
