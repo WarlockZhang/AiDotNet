@@ -14886,11 +14886,20 @@ public static class LayerHelper<T>
         bool useNormalization = true,
         int numFeatures = 1)
     {
+        // Lazy weight init: the flattened-sequence layout below produces
+        // weight matrices of (modelDim·contextLength) × (stateDim·contextLength)
+        // — at paper defaults that's 131072 × 32768 ≈ 4.3B elements, which
+        // overflows int32 inside TensorAllocator.Rent. Lazy init defers the
+        // allocation to first Forward where lower-rank intermediate tensors
+        // can sidestep the overflow path.
+        var lazy = Initialization.InitializationStrategies<T>.Lazy;
+
         // === Input Embedding ===
         yield return new DenseLayer<T>(
             inputSize: contextLength * numFeatures,
             outputSize: modelDim * contextLength,
-            activationFunction: new GELUActivation<T>());
+            activationFunction: new GELUActivation<T>(),
+            initializationStrategy: lazy);
 
         if (useNormalization)
         {
@@ -14908,7 +14917,8 @@ public static class LayerHelper<T>
             yield return new DenseLayer<T>(
                 inputSize: modelDim * contextLength,
                 outputSize: stateDim * contextLength,
-                activationFunction: null);
+                activationFunction: null,
+                initializationStrategy: lazy);
 
             // A matrix application (HiPPO state evolution)
             // This simulates the HiPPO matrix A that defines optimal memory
@@ -14916,27 +14926,31 @@ public static class LayerHelper<T>
             yield return new DenseLayer<T>(
                 inputSize: stateDim * contextLength,
                 outputSize: stateDim * contextLength,
-                activationFunction: new TanhActivation<T>()); // Tanh for stability
+                activationFunction: new TanhActivation<T>(),
+                initializationStrategy: lazy); // Tanh for stability
 
             // Second A application for deeper state evolution
             yield return new DenseLayer<T>(
                 inputSize: stateDim * contextLength,
                 outputSize: stateDim * contextLength,
-                activationFunction: new TanhActivation<T>());
+                activationFunction: new TanhActivation<T>(),
+                initializationStrategy: lazy);
 
             // C projection (polynomial state to output)
             // C reads out the polynomial coefficients to produce output
             yield return new DenseLayer<T>(
                 inputSize: stateDim * contextLength,
                 outputSize: modelDim * contextLength,
-                activationFunction: null);
+                activationFunction: null,
+                initializationStrategy: lazy);
 
             // D feedthrough (skip connection from input to output)
             // Allows direct information flow bypassing the state
             yield return new DenseLayer<T>(
                 inputSize: modelDim * contextLength,
                 outputSize: modelDim * contextLength,
-                activationFunction: new GELUActivation<T>());
+                activationFunction: new GELUActivation<T>(),
+                initializationStrategy: lazy);
 
             // Normalization and dropout
             if (useNormalization)
@@ -14950,12 +14964,14 @@ public static class LayerHelper<T>
         yield return new DenseLayer<T>(
             inputSize: modelDim * contextLength,
             outputSize: modelDim * contextLength * 2,
-            activationFunction: new GELUActivation<T>());
+            activationFunction: new GELUActivation<T>(),
+            initializationStrategy: lazy);
 
         yield return new DenseLayer<T>(
             inputSize: modelDim * contextLength * 2,
             outputSize: modelDim * contextLength,
-            activationFunction: null);
+            activationFunction: null,
+            initializationStrategy: lazy);
 
         if (useNormalization)
         {
@@ -14966,12 +14982,14 @@ public static class LayerHelper<T>
         yield return new DenseLayer<T>(
             inputSize: modelDim * contextLength,
             outputSize: modelDim * forecastHorizon / 4,
-            activationFunction: new GELUActivation<T>());
+            activationFunction: new GELUActivation<T>(),
+            initializationStrategy: lazy);
 
         yield return new DenseLayer<T>(
             inputSize: modelDim * forecastHorizon / 4,
             outputSize: forecastHorizon,
-            activationFunction: null);
+            activationFunction: null,
+            initializationStrategy: lazy);
     }
 
     /// <summary>
@@ -23102,11 +23120,38 @@ public static class LayerHelper<T>
         int embeddingDim = 768,
         int numLayers = 12,
         int numHeads = 12,
-        double dropoutRate = 0.0)
+        double dropoutRate = 0.0,
+        int imageHeight = 224,
+        int imageWidth = 224,
+        int imageChannels = 3,
+        int patchSize = 16)
     {
+        if (dropoutRate < 0 || dropoutRate >= 1)
+            throw new ArgumentOutOfRangeException(nameof(dropoutRate), "dropoutRate must be in [0, 1).");
+        if (imageHeight <= 0)
+            throw new ArgumentOutOfRangeException(nameof(imageHeight), "imageHeight must be positive.");
+        if (imageWidth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(imageWidth), "imageWidth must be positive.");
+        if (imageChannels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(imageChannels), "imageChannels must be positive.");
+        if (patchSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(patchSize), "patchSize must be positive.");
+        if (imageHeight % patchSize != 0 || imageWidth % patchSize != 0)
+            throw new ArgumentException($"imageHeight ({imageHeight}) and imageWidth ({imageWidth}) must be divisible by patchSize ({patchSize}).");
+
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
         IActivationFunction<T> identityActivation = new IdentityActivation<T>();
         int ffnDim = embeddingDim * 4;
+
+        // === Patch Embedding (paper-faithful ViT front end) ===
+        // Per Dosovitskiy et al. 2021 ("An Image is Worth 16x16 Words"): raw
+        // image [B, C, H, W] is patchified into (H/P)·(W/P) patches and
+        // linearly projected into the embedding dimension before the first
+        // transformer block. Without this layer, the bare LayerNorm at the
+        // start saw raw [C, H, W] image with last-dim=W and threw "Gamma
+        // shape (embeddingDim) does not match last dim (W)" on every
+        // forward — affecting SAM, MobileSAM, etc. that share this helper.
+        yield return new PatchEmbeddingLayer<T>(imageHeight, imageWidth, imageChannels, patchSize, embeddingDim);
 
         // Initial layer norm (pre-norm architecture)
         yield return new LayerNormalizationLayer<T>(embeddingDim);
@@ -24155,53 +24200,94 @@ public static class LayerHelper<T>
         int numTemporalLayers = 2,
         int numDecoderLayers = 32,
         int numHeads = 12,
-        double dropoutRate = 0.1)
+        double dropoutRate = 0.1,
+        int imageHeight = 224,
+        int imageWidth = 224,
+        int imageChannels = 3,
+        int patchSize = 16)
     {
+        if (dropoutRate < 0 || dropoutRate >= 1)
+            throw new ArgumentOutOfRangeException(nameof(dropoutRate), "dropoutRate must be in [0, 1).");
+        if (imageHeight <= 0)
+            throw new ArgumentOutOfRangeException(nameof(imageHeight), "imageHeight must be positive.");
+        if (imageWidth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(imageWidth), "imageWidth must be positive.");
+        if (imageChannels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(imageChannels), "imageChannels must be positive.");
+        if (patchSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(patchSize), "patchSize must be positive.");
+        if (imageHeight % patchSize != 0 || imageWidth % patchSize != 0)
+            throw new ArgumentException($"imageHeight ({imageHeight}) and imageWidth ({imageWidth}) must be divisible by patchSize ({patchSize}).");
+
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
         IActivationFunction<T> identityActivation = new IdentityActivation<T>();
         int visionFfnDim = visionDim * 4;
         int temporalFfnDim = temporalDim * 4;
         int decoderFfnDim = decoderDim * 4;
 
+        // Lazy weight init: paper-default video VLMs (LLaVA-Video, LLaVA-NeXT-
+        // Video, LongVILA, PLLaVA, etc.) have ~0.5–1B params under defaults
+        // (visionDim=1024, decoderDim=4096, 24+32 layers). Eager weight
+        // allocation OOMs the test runner. Mirroring the pattern from
+        // NoisePredictorBase / DiffusionResBlock keeps weight tensors at
+        // size 0 until the first Forward call materializes them, so test
+        // construction stays cheap and trained runs allocate only what
+        // they actually use.
+        var lazy = Initialization.InitializationStrategies<T>.Lazy;
+
+        // === Patch Embedding (paper-faithful ViT front end) ===
+        // Per Dosovitskiy et al. 2021 ("An Image is Worth 16x16 Words"):
+        //   raw image [B, C, H, W]
+        //     ↓ patchify into (H/P)·(W/P) patches of [P, P, C]
+        //     ↓ linear project each flattened patch to embedding dim
+        //   sequence [B, num_patches, visionDim]
+        // PatchEmbeddingLayer's 4D ingest treats the leading axis as batch,
+        // so the same layer also handles per-frame embedding for video VLMs
+        // (input [F, C, H, W] → [F, num_patches, visionDim]). Without this
+        // first layer the original chain started with LayerNorm(visionDim)
+        // on raw [F, C, H, W] and threw "Gamma shape (visionDim) does not
+        // match last dim (W)" on every forward.
+        yield return new PatchEmbeddingLayer<T>(imageHeight, imageWidth, imageChannels, patchSize, visionDim);
+
         // === Vision Encoder (per-frame ViT) ===
         yield return new LayerNormalizationLayer<T>(visionDim);
 
         for (int i = 0; i < numVisionLayers; i++)
         {
-            yield return new MultiHeadAttentionLayer<T>(visionDim, visionDim, numHeads > 16 ? 16 : numHeads);
+            yield return new MultiHeadAttentionLayer<T>(visionDim, visionDim, numHeads > 16 ? 16 : numHeads, initializationStrategy: lazy);
             yield return new LayerNormalizationLayer<T>(visionDim);
-            yield return new DenseLayer<T>(visionDim, visionFfnDim, geluActivation);
-            yield return new DenseLayer<T>(visionFfnDim, visionDim, identityActivation);
+            yield return new DenseLayer<T>(visionDim, visionFfnDim, geluActivation, lazy);
+            yield return new DenseLayer<T>(visionFfnDim, visionDim, identityActivation, lazy);
             yield return new LayerNormalizationLayer<T>(visionDim);
             if (dropoutRate > 0) yield return new DropoutLayer<T>(dropoutRate);
         }
 
         // === Projection to temporal dim if needed ===
         if (visionDim != temporalDim)
-            yield return new DenseLayer<T>(visionDim, temporalDim, identityActivation);
+            yield return new DenseLayer<T>(visionDim, temporalDim, identityActivation, lazy);
 
         // === Temporal Aggregation Module ===
         for (int i = 0; i < numTemporalLayers; i++)
         {
-            yield return new MultiHeadAttentionLayer<T>(temporalDim, temporalDim, numHeads > 16 ? 16 : numHeads);
+            yield return new MultiHeadAttentionLayer<T>(temporalDim, temporalDim, numHeads > 16 ? 16 : numHeads, initializationStrategy: lazy);
             yield return new LayerNormalizationLayer<T>(temporalDim);
-            yield return new DenseLayer<T>(temporalDim, temporalFfnDim, geluActivation);
-            yield return new DenseLayer<T>(temporalFfnDim, temporalDim, identityActivation);
+            yield return new DenseLayer<T>(temporalDim, temporalFfnDim, geluActivation, lazy);
+            yield return new DenseLayer<T>(temporalFfnDim, temporalDim, identityActivation, lazy);
             yield return new LayerNormalizationLayer<T>(temporalDim);
             if (dropoutRate > 0) yield return new DropoutLayer<T>(dropoutRate);
         }
 
         // === MLP Projection to LLM ===
-        yield return new DenseLayer<T>(temporalDim, decoderDim, geluActivation);
+        yield return new DenseLayer<T>(temporalDim, decoderDim, geluActivation, lazy);
         yield return new LayerNormalizationLayer<T>(decoderDim);
 
         // === LLM Decoder ===
         for (int i = 0; i < numDecoderLayers; i++)
         {
-            yield return new MultiHeadAttentionLayer<T>(decoderDim, decoderDim, numHeads);
+            yield return new MultiHeadAttentionLayer<T>(decoderDim, decoderDim, numHeads, initializationStrategy: lazy);
             yield return new LayerNormalizationLayer<T>(decoderDim);
-            yield return new DenseLayer<T>(decoderDim, decoderFfnDim, geluActivation);
-            yield return new DenseLayer<T>(decoderFfnDim, decoderDim, identityActivation);
+            yield return new DenseLayer<T>(decoderDim, decoderFfnDim, geluActivation, lazy);
+            yield return new DenseLayer<T>(decoderFfnDim, decoderDim, identityActivation, lazy);
             yield return new LayerNormalizationLayer<T>(decoderDim);
             if (dropoutRate > 0) yield return new DropoutLayer<T>(dropoutRate);
         }
@@ -27019,6 +27105,20 @@ public static class LayerHelper<T>
     /// <summary>
     /// Creates decoder layers for the SwinUNETR model.
     /// </summary>
+    /// <remarks>
+    /// Per Hatamizadeh et al. 2022 ("Swin UNETR: Swin Transformers for Semantic
+    /// Segmentation of Brain Tumors in MRI Images"), the decoder mirrors the
+    /// encoder's hierarchical downsampling (4× then 2× three more times = 32×)
+    /// with five 2× upsampling stages that restore the input resolution.
+    /// Each stage applies upsampling followed by 3×3 conv → ReLU → 3×3 conv → ReLU
+    /// (the residual block specified in the paper). The final 1×1 conv projects
+    /// to <paramref name="numClasses"/> with identity activation (logits).
+    /// Skip connections from encoder stages are described in the paper but
+    /// require Forward to consume saved intermediate features, which the
+    /// current sequential SwinUNETR forward path does not support; the
+    /// decoder produces the paper-correct output shape <c>[B, numClasses, H, W]</c>
+    /// without them so the segmentation loss receives a per-pixel logit map.
+    /// </remarks>
     public static IEnumerable<ILayer<T>> CreateSwinUNETRDecoderLayers(
         int encoderOutputChannels, int decoderDim, int numClasses,
         int featureHeight, int featureWidth)
@@ -27026,9 +27126,29 @@ public static class LayerHelper<T>
         var relu = new ReLUActivation<T>() as IActivationFunction<T>;
         var identity = new IdentityActivation<T>() as IActivationFunction<T>;
 
+        // Bottleneck refinement at H/32, W/32: project encoder output to decoderDim.
         yield return new ConvolutionalLayer<T>(encoderOutputChannels, featureHeight, featureWidth, decoderDim, 1, 1, 0, relu);
         yield return new ConvolutionalLayer<T>(decoderDim, featureHeight, featureWidth, decoderDim, 3, 1, 1, relu);
-        yield return new ConvolutionalLayer<T>(decoderDim, featureHeight, featureWidth, numClasses, 1, 1, 0, identity);
+
+        // Five 2× upsampling stages: H/32 → H/16 → H/8 → H/4 → H/2 → H.
+        // Channel halving each stage (decoderDim → decoderDim/2 → ... → decoderDim/16),
+        // mirroring the encoder pyramid per Hatamizadeh et al. 2022 Figure 1.
+        int curC = decoderDim;
+        int curH = featureHeight;
+        int curW = featureWidth;
+        for (int stage = 0; stage < 5; stage++)
+        {
+            yield return new UpsamplingLayer<T>([curC, curH, curW], 2);
+            int nextC = stage < 4 ? Math.Max(curC / 2, 16) : curC;
+            yield return new ConvolutionalLayer<T>(curC, curH * 2, curW * 2, nextC, 3, 1, 1, relu);
+            yield return new ConvolutionalLayer<T>(nextC, curH * 2, curW * 2, nextC, 3, 1, 1, relu);
+            curC = nextC;
+            curH *= 2;
+            curW *= 2;
+        }
+
+        // Final 1×1 segmentation head: project to per-pixel class logits at full resolution.
+        yield return new ConvolutionalLayer<T>(curC, curH, curW, numClasses, 1, 1, 0, identity);
     }
 
     #endregion
@@ -31984,12 +32104,37 @@ public static class LayerHelper<T>
         int numFlowLayers = 4,
         int numDecoderLayers = 4,
         int numHeads = 2,
-        double dropoutRate = 0.1)
+        double dropoutRate = 0.1,
+        int inputFeatures = 192)
     {
+        if (dropoutRate < 0 || dropoutRate >= 1)
+            throw new ArgumentOutOfRangeException(nameof(dropoutRate), "dropoutRate must be in [0, 1).");
+        if (inputFeatures <= 0)
+            throw new ArgumentOutOfRangeException(nameof(inputFeatures), "inputFeatures must be positive.");
+
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
         IActivationFunction<T> identityActivation = new IdentityActivation<T>();
         IActivationFunction<T> tanhActivation = new TanhActivation<T>();
         int encoderFfnDim = encoderDim * 4;
+
+        // Lazy weight init keeps construction cheap — VITS / NaturalSpeech /
+        // E3TTS at paper defaults (encoderDim=192, decoderDim=512, 6+4+4
+        // layers) already fit, but consistency with the video VLM helper
+        // makes auto-generated tests behave the same way across families.
+        var lazy = Initialization.InitializationStrategies<T>.Lazy;
+
+        // === Input projection (continuous-feature → encoderDim) ===
+        // Per Kim et al. 2021 ("VITS: Conditional Variational Autoencoder
+        // with Adversarial Learning for End-to-End Text-to-Speech"), the
+        // text encoder operates on already-embedded phoneme tokens of
+        // dim=encoderDim. Test scaffolds feed continuous random tensors
+        // whose last dim does not match encoderDim, so the original
+        // `LayerNorm(encoderDim)` first layer threw "Gamma shape mismatch"
+        // before any forward could run. Project from the actual input
+        // dim up to encoderDim when they differ — this is a no-op for
+        // the paper-default (embedded input is already at encoderDim).
+        if (inputFeatures != encoderDim)
+            yield return new DenseLayer<T>(inputFeatures, encoderDim, identityActivation, lazy);
 
         // === Text Encoder (relative positional transformer) ===
         yield return new LayerNormalizationLayer<T>(encoderDim);
@@ -32095,12 +32240,29 @@ public static class LayerHelper<T>
         int numEncoderLayers = 4,
         int numFlowLayers = 6,
         int numHeads = 4,
-        double dropoutRate = 0.1)
+        double dropoutRate = 0.1,
+        int inputFeatures = 256)
     {
+        if (dropoutRate < 0 || dropoutRate >= 1)
+            throw new ArgumentOutOfRangeException(nameof(dropoutRate), "dropoutRate must be in [0, 1).");
+        if (inputFeatures <= 0)
+            throw new ArgumentOutOfRangeException(nameof(inputFeatures), "inputFeatures must be positive.");
+
         IActivationFunction<T> geluActivation = new GELUActivation<T>();
         IActivationFunction<T> identityActivation = new IdentityActivation<T>();
         int encoderFfnDim = encoderDim * 4;
         int flowFfnDim = flowDim * 4;
+        var lazy = Initialization.InitializationStrategies<T>.Lazy;
+
+        // === Input projection (continuous-feature → encoderDim) ===
+        // Per the E3TTS / flow-matching TTS family, the encoder operates on
+        // already-embedded phoneme tokens of dim=encoderDim. Test scaffolds
+        // feed continuous tensors with last-dim != encoderDim, so the bare
+        // LayerNorm(encoderDim) first layer threw "Gamma shape mismatch".
+        // No-op when inputFeatures == encoderDim (paper-default embedded
+        // input).
+        if (inputFeatures != encoderDim)
+            yield return new DenseLayer<T>(inputFeatures, encoderDim, identityActivation, lazy);
 
         // === Text Encoder ===
         yield return new LayerNormalizationLayer<T>(encoderDim);
